@@ -1,0 +1,39 @@
+# Include important documentation files
+include README.md
+include LICENSE
+include CHANGELOG.md
+include CONTRIBUTING.md
+include CODE_OF_CONDUCT.md
+include SECURITY.md
+include PARTITIONING.md
+
+# Include configuration files
+include pyproject.toml
+include pytest.ini
+include .coveragerc
+
+# Include all Python source files
+recursive-include fleuve *.py
+recursive-include fleuve_ui *.py
+
+# Include type checking marker
+include fleuve/py.typed
+
+# Exclude test files from distribution
+recursive-exclude fleuve/tests *
+recursive-exclude fleuve_ui/backend/tests *
+
+# Exclude examples from main distribution (they're separate)
+recursive-exclude examples *
+
+# Exclude development files
+exclude .gitignore
+recursive-exclude .github *
+recursive-exclude fleuve_ui/frontend *
+
+# Exclude build artifacts and caches
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
+global-exclude .DS_Store
+global-exclude *.egg-info

@@ -1,0 +1,223 @@
+import datetime
+from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
+from typing import Any, Generic, Literal, TypeVar
+
+from pydantic import BaseModel, Field
+
+from fleuve.stream import ConsumedEvent
+from fleuve.postgres import RetryPolicy
+
+
+class EventBase(BaseModel, ABC):
+    # This makes the model abstract
+    class Config:
+        abstract = True
+
+    # Optional metadata (e.g. workflow_tags) injected by repo; not part of event schema.
+    metadata_: dict[str, Any] = Field(default_factory=dict, exclude=True)
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+
+        # Skip the abstract base itself.
+        if cls is EventBase:
+            return
+
+        # Skip validation for ABC classes (built-in abstract events meant to be subclassed)
+        # Also check if the class name suggests it's a generic instance (e.g., "EvDelay[...]")
+        if (
+            ABC in cls.__bases__
+            or ("EvDelay[" in cls.__name__)
+            or ("EvDirectMessage[" in cls.__name__)
+            or ("EvDelayComplete[" in cls.__name__)
+        ):
+            return
+
+        # Did the subclass actually override the annotation?
+        annotation = cls.__annotations__.get("type")
+        if annotation is None:
+            raise TypeError(
+                f"{cls.__name__} must override `type` with a Literal[...] default."
+            )
+
+
+class Sub(BaseModel):
+    """Internal subscription: workflow subscribes to events from another workflow/event type."""
+
+    event_type: str
+    workflow_id: str
+    tags: list[str] = []
+    tags_all: list[str] = []
+
+    def matches_tags(self, event_tags: list[str], workflow_tags: list[str]) -> bool:
+        """Check if subscription matches event/workflow tags.
+        
+        Args:
+            event_tags: Tags from the event's metadata
+            workflow_tags: Tags from the workflow's metadata
+            
+        Returns:
+            True if the subscription's tag filters match, False otherwise
+        """
+        all_tags = set(event_tags) | set(workflow_tags)
+        
+        # If tags specified, check ANY match (OR)
+        if self.tags and not any(tag in all_tags for tag in self.tags):
+            return False
+        
+        # If tags_all specified, check ALL match (AND)
+        if self.tags_all and not all(tag in all_tags for tag in self.tags_all):
+            return False
+        
+        return True
+
+
+class ExternalSub(BaseModel):
+    """External subscription: workflow subscribes to an external NATS message topic."""
+
+    topic: str
+
+
+class StateBase(BaseModel):
+    subscriptions: list[Sub]
+    external_subscriptions: list["ExternalSub"] = []
+
+
+# Define type variables for generic typing
+C = TypeVar("C", bound=BaseModel)  # Command type
+E = TypeVar("E", bound=EventBase)  # Event type
+S = TypeVar("S", bound=StateBase)
+EE = TypeVar(
+    "EE", bound=EventBase
+)  # External Event the workflow is supposed to react to
+
+
+class Rejection(BaseModel):
+    msg: str = ""
+
+class AlreadyExists(Rejection):
+    pass
+
+class EvDirectMessage(EventBase, ABC):
+    target_workflow_id: str
+    target_workflow_type: str
+
+
+class EvDelayComplete(EventBase, ABC):
+    at: datetime.datetime
+
+
+class EvDelay(EventBase, Generic[C], ABC):
+    delay_until: datetime.datetime
+    next_cmd: C
+
+
+class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
+    @classmethod
+    @abstractmethod
+    def name(cls) -> str:
+        pass
+
+    @classmethod
+    def decide_and_evolve(
+        cls, state: S | None, cmd: C
+    ) -> Rejection | tuple[S | None, list[E]]:
+        d = cls.decide(state, cmd)
+        if isinstance(d, Rejection):
+            return d
+        new_state = cls.evolve_(state, d)
+        return new_state, d
+
+    @classmethod
+    def evolve_(cls, state: S | None, events: list[E]) -> S:
+        for e in events:
+            state = cls.evolve(state, e)
+
+        assert state
+        return state
+
+    @staticmethod
+    @abstractmethod
+    def decide(state: S | None, cmd: C) -> list[E] | Rejection:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def evolve(state: S | None, event: E) -> S:
+        pass
+
+    @classmethod
+    @abstractmethod
+    def event_to_cmd(cls, e: EE) -> C:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def is_final_event(e: E) -> bool:
+        pass
+
+
+
+
+class ActionContext(BaseModel):
+    """Context passed to action execution, allowing checkpoint/resume functionality."""
+
+    workflow_id: str
+    event_number: int
+    checkpoint: dict = {}
+    retry_count: int = 0
+    retry_policy: RetryPolicy
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Private attribute for checkpoint saver callback (not part of Pydantic model)
+        self._checkpoint_saver: Callable[[dict], Awaitable[None]] | None = None
+
+    def save_checkpoint(self, data: dict) -> None:
+        """Save checkpoint data. This will be persisted and available on resume."""
+        self.checkpoint.update(data)
+
+    async def save_checkpoint_now(self, data: dict) -> None:
+        """
+        Save checkpoint data and persist it immediately to the database.
+        
+        This method should be used during long-running actions to ensure checkpoint
+        progress is not lost if the process crashes. For regular checkpoint updates
+        that only need to be saved at the end of action execution, use save_checkpoint().
+        
+        Args:
+            data: Dictionary of checkpoint data to save
+        """
+        # Update the checkpoint dict
+        self.save_checkpoint(data)
+        
+        # Persist immediately if checkpoint saver is available
+        if self._checkpoint_saver is not None:
+            await self._checkpoint_saver(self.checkpoint)
+
+
+Wf = TypeVar("Wf", bound=Workflow)
+
+
+class Adapter(Generic[E, C], ABC):
+    @abstractmethod
+    async def act_on(
+        self, event: ConsumedEvent[E], context: "ActionContext | None" = None
+    ) -> C | None:
+        """
+        Execute an action for an event.
+
+        Args:
+            event: The event to act on
+            context: Optional action context for checkpoint/resume functionality.
+                     If None, action is executed without checkpoint support.
+
+        Returns:
+            Optional command to be processed after action completion.
+        """
+        pass
+
+    @abstractmethod
+    def to_be_act_on(self, event: Exception) -> bool:
+        pass
