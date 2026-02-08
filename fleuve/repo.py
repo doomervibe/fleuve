@@ -134,6 +134,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         db_workflow_metadata_model: Type[Any] | None = None,
         db_external_sub_model: Type[Any] | None = None,
         sync_db: SyncDbHandler | None = None,
+        adapter: Any | None = None,
     ) -> None:
         self._workflow_type = model.name()
         self._uuid = uuid4
@@ -144,7 +145,16 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         self.db_sub_model = db_sub_model
         self.db_workflow_metadata_model = db_workflow_metadata_model
         self.db_external_sub_model = db_external_sub_model
-        self.sync_db = sync_db
+        if sync_db is not None:
+            self._sync_db_handler = sync_db
+        elif adapter is not None:
+
+            async def _adapter_sync_db(s: AsyncSession, id_: str, old: Any, new: Any, ev: list) -> None:
+                await adapter.sync_db(s, id_, old, new, ev)
+
+            self._sync_db_handler = _adapter_sync_db
+        else:
+            self._sync_db_handler = None
 
     async def process_command(
         self,
@@ -177,8 +187,8 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                 await self._handle_subscriptions(old.state, new_state, s, id)
                 await self._handle_external_subscriptions(old.state, new_state, s, id)
 
-                if self.sync_db:
-                    await self.sync_db(s, id, old.state, new_state, events)
+                if self._sync_db_handler:
+                    await self._sync_db_handler(s, id, old.state, new_state, events)
 
                 # Inject workflow tags into events for fast access during subscription matching
                 await self._inject_workflow_tags_into_events(id, events)
@@ -324,8 +334,8 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                 await self._handle_subscriptions(None, state, s, id)
                 await self._handle_external_subscriptions(None, state, s, id)
 
-                if self.sync_db:
-                    await self.sync_db(s, id, None, state, events)
+                if self._sync_db_handler:
+                    await self._sync_db_handler(s, id, None, state, events)
 
                 # Inject workflow tags into events for fast access
                 for event in events:

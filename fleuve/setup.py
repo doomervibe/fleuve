@@ -168,7 +168,7 @@ async def create_workflow_runner(
         await ephemeral_storage.__aenter__()
         
         try:
-            # Create repository
+            # Create repository (sync_db from adapter.sync_db when sync_db not provided)
             repo = AsyncRepo(
                 session_maker=session_maker,
                 es=ephemeral_storage,
@@ -178,6 +178,7 @@ async def create_workflow_runner(
                 db_workflow_metadata_model=db_workflow_metadata_model,
                 db_external_sub_model=db_external_subscription_model,
                 sync_db=sync_db,
+                adapter=adapter,
             )
             
             # Create OutboxPublisher if JetStream enabled

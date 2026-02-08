@@ -429,3 +429,55 @@ class TestAsyncRepo:
             )
         )
         assert len(rows_reject.scalars().all()) == 0
+
+    @pytest.mark.asyncio
+    async def test_sync_db_via_adapter(
+        self,
+        test_session_maker,
+        ephemeral_storage,
+        test_event_model,
+        test_subscription_model,
+        test_session,
+        clean_tables,
+    ):
+        """sync_db can be provided by adapter.sync_db when adapter is passed to repo."""
+        from fleuve.model import Adapter
+        from fleuve.tests.conftest import TestCommand
+        from fleuve.tests.models import WorkflowSyncLogModel
+
+        class AdapterWithSyncDb(Adapter):
+            async def act_on(self, event, context=None):
+                return None
+
+            def to_be_act_on(self, event):
+                return False
+
+            async def sync_db(self, s, workflow_id, old_state, new_state, events):
+                await s.execute(
+                    insert(WorkflowSyncLogModel).values(
+                        workflow_id=workflow_id,
+                        events_count=len(events),
+                    )
+                )
+
+        adapter = AdapterWithSyncDb()
+        repo = AsyncRepo(
+            session_maker=test_session_maker,
+            es=ephemeral_storage,
+            model=TestWorkflow,
+            db_event_model=test_event_model,
+            db_sub_model=test_subscription_model,
+            adapter=adapter,
+        )
+
+        result = await repo.create_new(TestCommand(action="create", value=10), "wf-adapter-1")
+        assert not isinstance(result, Rejection)
+        rows = (
+            await test_session.execute(
+                select(WorkflowSyncLogModel).where(
+                    WorkflowSyncLogModel.workflow_id == "wf-adapter-1"
+                )
+            )
+        )
+        assert len(rows.scalars().all()) == 1
+        assert rows.scalars().one().events_count == 1

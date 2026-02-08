@@ -221,3 +221,21 @@ class Adapter(Generic[E, C], ABC):
     @abstractmethod
     def to_be_act_on(self, event: Exception) -> bool:
         pass
+
+    async def sync_db(
+        self,
+        session: Any,
+        workflow_id: str,
+        old_state: Any,
+        new_state: Any,
+        events: list[Any],
+    ) -> None:
+        """
+        Optional: update denormalized/auxiliary DB in the same transaction as event insert.
+
+        Called by AsyncRepo after subscription handling and before event insert.
+        Override to maintain strongly consistent DB data (e.g. summary tables).
+        Must not commit; the repo commits the transaction.
+        Default implementation does nothing.
+        """
+        pass
