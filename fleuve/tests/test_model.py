@@ -165,43 +165,6 @@ class TestActionContext:
         assert context.retry_count == 1
         assert context.retry_policy == retry_policy
 
-    def test_save_checkpoint(self, action_context: ActionContext):
-        """Test saving checkpoint data."""
-        action_context.save_checkpoint({"key1": "value1"})
-        assert action_context.checkpoint == {"key1": "value1"}
-
-        action_context.save_checkpoint({"key2": "value2"})
-        assert action_context.checkpoint == {"key1": "value1", "key2": "value2"}
-
-    @pytest.mark.asyncio
-    async def test_save_checkpoint_now_without_callback(self, action_context: ActionContext):
-        """Test save_checkpoint_now works even without checkpoint saver callback."""
-        # Should work without callback (just updates dict, doesn't persist)
-        await action_context.save_checkpoint_now({"key1": "value1"})
-        assert action_context.checkpoint == {"key1": "value1"}
-
-    @pytest.mark.asyncio
-    async def test_save_checkpoint_now_with_callback(self, action_context: ActionContext):
-        """Test save_checkpoint_now calls checkpoint saver callback when available."""
-        checkpoint_saved = []
-        
-        async def checkpoint_saver(checkpoint_data: dict) -> None:
-            checkpoint_saved.append(checkpoint_data.copy())
-        
-        action_context._checkpoint_saver = checkpoint_saver
-        
-        await action_context.save_checkpoint_now({"key1": "value1"})
-        assert action_context.checkpoint == {"key1": "value1"}
-        assert len(checkpoint_saved) == 1
-        assert checkpoint_saved[0] == {"key1": "value1"}
-        
-        # Test that it updates existing checkpoint
-        await action_context.save_checkpoint_now({"key2": "value2"})
-        assert action_context.checkpoint == {"key1": "value1", "key2": "value2"}
-        assert len(checkpoint_saved) == 2
-        assert checkpoint_saved[1] == {"key1": "value1", "key2": "value2"}
-
-
 class TestWorkflow:
     """Tests for Workflow abstract class."""
 

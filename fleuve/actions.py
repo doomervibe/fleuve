@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from fleuve.model import ActionContext, Adapter, RetryPolicy
+from fleuve.model import ActionContext, Adapter, CheckpointYield, RetryPolicy
 from fleuve.postgres import Activity, StoredEvent
 from fleuve.repo import AsyncRepo
 from fleuve.stream import ConsumedEvent
@@ -157,27 +157,30 @@ class ActionExecutor(Generic[C, Ae]):
                     retry_count=retry_count,
                     retry_policy=activity.retry_policy.model_copy(),
                 )
-                
-                # Set up checkpoint saver callback for immediate persistence
-                async def checkpoint_saver(checkpoint_data: dict) -> None:
-                    """Callback to immediately persist checkpoint data to database."""
-                    async with self._session_maker() as s:
-                        await self._save_checkpoint(
-                            s, workflow_id, event_number, checkpoint_data
-                        )
-                
-                context._checkpoint_saver = checkpoint_saver
 
                 # Execute the action (with timeout if configured)
-                # Pass the actual event, not ConsumedEvent
+                # act_on is an async generator yielding zero or more commands and/or checkpoints
                 try:
+
+                    async def consume_commands() -> None:
+                        async for item in self._adapter.act_on(event, context):
+                            if isinstance(item, CheckpointYield):
+                                context.checkpoint.update(item.data)
+                                if item.save_now:
+                                    async with self._session_maker() as s:
+                                        await self._save_checkpoint(
+                                            s, workflow_id, event_number, context.checkpoint
+                                        )
+                            else:
+                                await self._repo.process_command(workflow_id, item)
+
                     if self._action_timeout:
-                        cmd = await asyncio.wait_for(
-                            self._adapter.act_on(event, context),
+                        await asyncio.wait_for(
+                            consume_commands(),
                             timeout=self._action_timeout.total_seconds(),
                         )
                     else:
-                        cmd = await self._adapter.act_on(event, context)
+                        await consume_commands()
                 except Exception:
                     # Save checkpoint even on failure for resume capability
                     if context.checkpoint != activity.checkpoint:
@@ -207,23 +210,12 @@ class ActionExecutor(Generic[C, Ae]):
                 activity.checkpoint = context.checkpoint
                 activity.retry_policy = context.retry_policy
 
-                # Process the resulting command if provided BEFORE marking as completed
-                # This ensures that if the process crashes, the action will be recovered
-                # and the command will be processed again (process_command is idempotent)
-                if cmd:
-                    try:
-                        await self._repo.process_command(workflow_id, cmd)
-                    except Exception as e:
-                        logger.exception(
-                            f"Error processing command after action completion "
-                            f"for {workflow_id}:{event_number}: {e}"
-                        )
-                        raise
+                # Commands were processed during consume_commands() above
 
                 # Action completed successfully - mark as completed after command processing
                 async with self._session_maker() as s:
                     await self._mark_action_completed(
-                        s, workflow_id, event_number, cmd, result=None
+                        s, workflow_id, event_number, result=None
                     )
 
                 logger.info(
@@ -429,7 +421,6 @@ class ActionExecutor(Generic[C, Ae]):
         s: AsyncSession,
         workflow_id: str,
         event_number: int,
-        cmd: C | None,
         result: bytes | None = None,
     ):
         """Mark an action as completed."""
@@ -437,8 +428,6 @@ class ActionExecutor(Generic[C, Ae]):
             "status": ActionStatus.COMPLETED.value,
             "finished_at": datetime.datetime.now(datetime.timezone.utc),
         }
-        if cmd:
-            values["resulting_command"] = cmd
         if result:
             values["result"] = result
 

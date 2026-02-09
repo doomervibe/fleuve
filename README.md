@@ -349,8 +349,8 @@ class OrderState(StateBase):
 
 **Adapter Methods:**
 
-#### `act_on(event, context?) -> Command | None`
-Execute an action for an event. Can return a command to be processed after completion.
+#### `act_on(event, context?)` — async generator yielding commands and/or checkpoints
+Execute an action for an event; yields zero or more **commands** (each is applied to the same workflow) and/or **CheckpointYield** (checkpoint data). For checkpoints: `CheckpointYield(data=..., save_now=False)` merges data and persists at end of action; `CheckpointYield(data=..., save_now=True)` merges and persists immediately.
 
 ```python
 @staticmethod
@@ -449,7 +449,7 @@ class OrderAdapter(Adapter[EvOrderPlaced | EvOrderShipped, CmdPlaceOrder]):
         self, 
         event: ConsumedEvent[EvOrderPlaced | EvOrderShipped],
         context: ActionContext | None = None
-    ) -> CmdPlaceOrder | None:
+    ):
         # Handle side effects based on event type
         if isinstance(event.event, EvOrderPlaced):
             # Send confirmation email
@@ -464,8 +464,10 @@ class OrderAdapter(Adapter[EvOrderPlaced | EvOrderShipped, CmdPlaceOrder]):
                 tracking_number=event.event.tracking_number
             )
         
-        # Optionally return a command to process after action
-        return None
+        # Optionally yield commands to process after action
+        # yield SomeCommand(...)
+        if False:
+            yield
     
     def to_be_act_on(self, event: EvOrderPlaced | EvOrderShipped) -> bool:
         # Determine which events should trigger actions
@@ -476,26 +478,35 @@ class OrderAdapter(Adapter[EvOrderPlaced | EvOrderShipped, CmdPlaceOrder]):
 - Keep activities idempotent (safe to retry)
 - Use checkpoints for long-running operations
 - Handle failures gracefully
-- Return commands to trigger follow-up workflows if needed
+- Yield commands to trigger follow-up workflows if needed
 
 **Using Checkpoints:**
 
+Yield **CheckpointYield** from `act_on` to update and optionally persist checkpoint:
+
+- `yield CheckpointYield(data=..., save_now=False)` — merge into checkpoint; persisted at end of action.
+- `yield CheckpointYield(data=..., save_now=True)` — merge and persist immediately.
+
 ```python
-async def act_on(self, event: ConsumedEvent, context: ActionContext | None = None) -> None:
+from fleuve import CheckpointYield
+
+async def act_on(self, event: ConsumedEvent, context: ActionContext | None = None):
     if context is None:
+        if False:
+            yield
         return
     
-    # Check if we've already completed step 1
     if "step1_complete" not in context.checkpoint:
         await self.step1()
-        context.save_checkpoint({"step1_complete": True})
+        yield CheckpointYield(data={"step1_complete": True}, save_now=False)
     
-    # Check if we've already completed step 2
+    yield CheckpointYield(data={"step2_progress": 50}, save_now=False)
+    yield CheckpointYield(data={"step2_saved": True}, save_now=True)  # persist immediately
+    
     if "step2_complete" not in context.checkpoint:
         await self.step2()
-        context.save_checkpoint({"step2_complete": True})
+        yield CheckpointYield(data={"step2_complete": True}, save_now=False)
     
-    # Step 3 (will only run if steps 1 and 2 completed)
     await self.step3()
 ```
 
@@ -584,7 +595,8 @@ class EmailAdapter(Adapter[OrderEvent, OrderCommand]):
     async def act_on(self, event: ConsumedEvent[OrderEvent], context: ActionContext | None = None):
         if isinstance(event.event, EvOrderPlaced):
             await send_confirmation_email(event.event.customer_id)
-        return None
+        if False:
+            yield  # async generator; yield commands if any
     
     def to_be_act_on(self, event: OrderEvent) -> bool:
         return isinstance(event, EvOrderPlaced)
@@ -792,7 +804,6 @@ class OrderSubscriptionModel(Subscription, Base):
 
 class OrderActivityModel(Activity, Base):
     __tablename__ = "order_activities"
-    resulting_command = mapped_column(PydanticType(OrderCommand), nullable=True)
 
 class OrderDelayScheduleModel(DelaySchedule, Base):
     __tablename__ = "order_delay_schedules"
@@ -819,7 +830,7 @@ class OrderAdapter(Adapter[OrderEvent, OrderCommand]):
         self, 
         event: ConsumedEvent[OrderEvent],
         context: ActionContext | None = None
-    ) -> OrderCommand | None:
+    ):
         # Send notifications based on events
         if isinstance(event.event, EvOrderPlaced):
             await self.notification_service.send_order_confirmation(
@@ -834,7 +845,9 @@ class OrderAdapter(Adapter[OrderEvent, OrderCommand]):
                 payment_id=event.event.payment_id
             )
         
-        return None
+        # yield commands if any
+        if False:
+            yield
     
     def to_be_act_on(self, event: OrderEvent) -> bool:
         return isinstance(event, (EvOrderPlaced, EvPaymentReceived))
@@ -1013,7 +1026,7 @@ You should see:
 - Manages state in NATS cache
 - Processes commands through workflows
 - Handles workflow creation and updates
-- Optional `sync_db`: runs custom DB updates in the same transaction as event insert (for strongly consistent denormalized/auxiliary data)
+- Optional `sync_db` or `adapter.sync_db`: runs custom DB updates in the same transaction as event insert (for strongly consistent denormalized/auxiliary data); when using `create_workflow_runner(adapter=...)`, the repo uses `adapter.sync_db` unless `sync_db` is passed explicitly
 
 #### **ActionExecutor**
 - Executes adapter actions
@@ -1150,7 +1163,7 @@ Sub(event_type="*", workflow_id="*")
 
 ### Strongly consistent DB sync
 
-Keep denormalized or auxiliary database tables in sync with the event stream by running updates in the **same transaction** as event insertion. Use the optional `sync_db` handler so that when events are appended (via `create_new` or `process_command`), your handler runs inside that transaction—after subscription handling and before event insert—and can perform arbitrary DB writes that commit atomically with the events.
+Keep denormalized or auxiliary database tables in sync with the event stream by running updates in the **same transaction** as event insertion. When events are appended (via `create_new` or `process_command`), your handler runs inside that transaction—after subscription handling and before event insert—and can perform arbitrary DB writes that commit atomically with the events.
 
 **Handler signature:** `async (session, workflow_id, old_state, new_state, events) -> None`
 
@@ -1158,40 +1171,55 @@ Keep denormalized or auxiliary database tables in sync with the event stream by 
 - `new_state` is the evolved state after applying `events`.
 - Do not commit inside the handler; the repo commits the transaction after event insert.
 
-**Example: maintain a workflow summary table**
+**Option 1: implement on the Adapter** (recommended when you already have an adapter)
 
 ```python
-from fleuve.repo import AsyncRepo, SyncDbHandler
+from fleuve.model import Adapter
 from sqlalchemy import insert
 
-async def sync_order_summary(s, workflow_id, old_state, new_state, events):
-    # Update denormalized table in same transaction as event insert
-    await s.execute(
-        insert(OrderSummaryModel).values(
-            workflow_id=workflow_id,
-            total=new_state.total,
-            status=new_state.status,
-        )
-    )
+class OrderAdapter(Adapter[OrderEvent, OrderCommand]):
+    async def act_on(self, event, context=None):
+        # ... side effects
+        # yield commands if any
+        if False:
+            yield
 
-# Wire via create_workflow_runner
+    def to_be_act_on(self, event):
+        return isinstance(event, EvOrderPlaced)
+
+    async def sync_db(self, session, workflow_id, old_state, new_state, events):
+        await session.execute(
+            insert(OrderSummaryModel).values(
+                workflow_id=workflow_id,
+                total=new_state.total,
+                status=new_state.status,
+            )
+        )
+
+# create_workflow_runner passes adapter to the repo; repo uses adapter.sync_db
 async with create_workflow_runner(
     workflow_type=OrderWorkflow,
     state_type=OrderState,
-    sync_db=sync_order_summary,
+    adapter=OrderAdapter(),
 ) as resources:
     ...
-
-# Or when building AsyncRepo directly
-repo = AsyncRepo(
-    session_maker=session_maker,
-    es=ephemeral_storage,
-    model=OrderWorkflow,
-    db_event_model=OrderEvent,
-    db_sub_model=OrderSubscription,
-    sync_db=sync_order_summary,
-)
 ```
+
+**Option 2: pass a standalone sync_db callable**
+
+```python
+async def sync_order_summary(s, workflow_id, old_state, new_state, events):
+    await s.execute(insert(OrderSummaryModel).values(...))
+
+async with create_workflow_runner(
+    workflow_type=OrderWorkflow,
+    state_type=OrderState,
+    sync_db=sync_order_summary,  # overrides adapter.sync_db when both present
+) as resources:
+    ...
+```
+
+**AsyncRepo:** Pass `adapter=...` and the repo uses `adapter.sync_db` when no explicit `sync_db` is given. Pass `sync_db=...` to override or when you have no adapter.
 
 **Execution order:** lock/load state → decide → evolve → handle subscriptions → **sync_db** → inject tags → insert events → commit.
 
@@ -1238,12 +1266,14 @@ retry_policy = RetryPolicy(
 )
 
 # You can modify retry policy in ActionContext
-async def act_on(self, event: ConsumedEvent, context: ActionContext | None) -> Command | None:
+async def act_on(self, event: ConsumedEvent, context: ActionContext | None):
     if context:
         # Increase retries for this specific action
         context.retry_policy.max_retries = 10
     
-    # ... perform action
+    # ... perform action; yield commands if any
+    if False:
+        yield
 ```
 
 ### Event Encryption
@@ -1394,7 +1424,7 @@ Base class for workflow implementations.
 
 Repository for workflow state and event persistence.
 
-**Optional constructor arg:** `sync_db: SyncDbHandler | None` — async callable `(session, workflow_id, old_state, new_state, events) -> None`; runs in the same transaction as event insert (after subscription handling, before event insert). Use for strongly consistent denormalized or auxiliary DB updates. Must not commit inside the handler.
+**Optional constructor args:** `sync_db: SyncDbHandler | None` — explicit async callable for strongly consistent DB updates; `adapter: Adapter | None` — when provided and `sync_db` is not, the repo uses `adapter.sync_db`. Handler signature: `(session, workflow_id, old_state, new_state, events) -> None`; runs in the same transaction as event insert (after subscription handling, before event insert). Must not commit inside the handler.
 
 **Methods:**
 - `create_new(cmd, workflow_id) -> StoredState | Rejection`: Create new workflow
@@ -1407,7 +1437,7 @@ Repository for workflow state and event persistence.
 Base class for side effect handlers.
 
 **Abstract Methods:**
-- `act_on(event, context?) -> C | None`: Execute action for event
+- `act_on(event, context?)`: Async generator yielding zero or more **commands** (each applied to the same workflow) and/or **CheckpointYield** (checkpoint data; `save_now=True` = persist immediately, `save_now=False` = persist at end)
 - `to_be_act_on(event) -> bool`: Determine if event should trigger action
 
 #### `ActionContext`
@@ -1421,8 +1451,15 @@ Context for action execution with checkpoint support.
 - `retry_count: int`: Current retry attempt
 - `retry_policy: RetryPolicy`: Retry configuration
 
-**Methods:**
-- `save_checkpoint(data: dict)`: Save checkpoint data
+**Checkpoint updates:** In `act_on` yield `CheckpointYield(data=..., save_now=False)` (persist at end) or `CheckpointYield(data=..., save_now=True)` (persist immediately).
+
+#### `CheckpointYield`
+
+Checkpoint data yielded from `act_on` to update and optionally persist checkpoint.
+
+**Fields:**
+- `data: dict`: Checkpoint data to merge into context.checkpoint
+- `save_now: bool = False`: If True, persist immediately to the DB; if False, persist at end of action
 
 ### Configuration
 

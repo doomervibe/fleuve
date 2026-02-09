@@ -391,13 +391,6 @@ class FleuveUIBackend:
                 
                 activities = []
                 for activity in result.scalars().all():
-                    resulting_command = None
-                    if activity.resulting_command:
-                        if hasattr(activity.resulting_command, 'model_dump'):
-                            resulting_command = activity.resulting_command.model_dump()
-                        elif isinstance(activity.resulting_command, dict):
-                            resulting_command = activity.resulting_command
-                    
                     checkpoint = {}
                     if hasattr(activity, 'checkpoint') and activity.checkpoint:
                         checkpoint = activity.checkpoint if isinstance(activity.checkpoint, dict) else {}
@@ -414,7 +407,6 @@ class FleuveUIBackend:
                         error_message=activity.error_message,
                         error_type=activity.error_type,
                         checkpoint=checkpoint,
-                        resulting_command=resulting_command,
                     ))
                 
                 return activities

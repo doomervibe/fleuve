@@ -24,7 +24,8 @@ class MockAdapter(Adapter):
         self.called_events.append((event, context))
         if self.should_fail:
             raise ValueError("Test failure")
-        return self.return_cmd
+        if self.return_cmd is not None:
+            yield self.return_cmd
 
     def to_be_act_on(self, event):
         return True
@@ -291,7 +292,8 @@ class TestActionExecutor:
         class SlowAdapter(Adapter):
             async def act_on(self, event, context=None):
                 await asyncio.sleep(2)  # Longer than timeout
-                return None
+                if False:
+                    yield  # async generator
 
             def to_be_act_on(self, event):
                 return True
@@ -337,18 +339,13 @@ class TestActionExecutor:
         clean_tables,
         mock_repo,
     ):
-        """Test that checkpoints saved via save_checkpoint_now() persist immediately."""
+        """Test that checkpoints yielded with save_now=True persist immediately."""
+        from fleuve.model import CheckpointYield
         from fleuve.tests.conftest import TestEvent
-
-        checkpoint_saved = []
 
         class CheckpointAdapter(MockAdapter):
             async def act_on(self, event, context=None):
-                if context:
-                    # Save checkpoint during execution
-                    await context.save_checkpoint_now({"step": 1, "progress": 50})
-                    checkpoint_saved.append(context.checkpoint.copy())
-                return None
+                yield CheckpointYield(data={"step": 1, "progress": 50}, save_now=True)
 
         adapter = CheckpointAdapter()
         executor = ActionExecutor(
@@ -370,11 +367,6 @@ class TestActionExecutor:
 
         await executor.execute_action(event)
 
-        # Verify checkpoint was saved during execution
-        assert len(checkpoint_saved) == 1
-        assert checkpoint_saved[0] == {"step": 1, "progress": 50}
-
-        # Verify checkpoint was persisted to database
         from sqlalchemy import select
         async with test_session_maker() as s:
             activity = await s.scalar(
@@ -383,5 +375,55 @@ class TestActionExecutor:
                 .where(test_activity_model.event_number == 1)
             )
             assert activity is not None
-            # Checkpoint should contain the data saved during execution
             assert activity.checkpoint == {"step": 1, "progress": 50}
+
+    @pytest.mark.asyncio
+    async def test_act_on_yields_checkpoint_save_now_and_at_end(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Test that act_on can yield CheckpointYield with save_now True (persist now) vs False (persist at end)."""
+        from fleuve.model import Adapter, CheckpointYield
+        from fleuve.tests.conftest import TestEvent
+
+        class CheckpointYieldAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                yield CheckpointYield(data={"step1": 1}, save_now=False)
+                yield CheckpointYield(data={"step2": 2}, save_now=True)
+                yield CheckpointYield(data={"step3": 3}, save_now=False)
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=CheckpointYieldAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+        )
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=TestEvent(value=10),
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+        )
+
+        await executor.execute_action(event)
+
+        from sqlalchemy import select
+        async with test_session_maker() as s:
+            activity = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 1)
+            )
+            assert activity is not None
+            assert activity.checkpoint == {"step1": 1, "step2": 2, "step3": 3}

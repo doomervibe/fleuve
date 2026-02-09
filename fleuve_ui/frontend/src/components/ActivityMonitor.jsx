@@ -341,14 +341,6 @@ export default function ActivityMonitor() {
                   </pre>
                 </div>
               )}
-              {selectedActivity.resulting_command && (
-                <div>
-                  <p className="text-xs font-mono font-medium text-[#00ff00] font-mono text-xs opacity-70 mb-2">resulting command</p>
-                  <pre className="bg-[#0a0a0a] p-3 rounded-md overflow-x-auto text-xs font-mono text-[#00ff00] font-mono text-xs border border-[#2a2a2a]">
-                    {JSON.stringify(selectedActivity.resulting_command, null, 2)}
-                  </pre>
-                </div>
-              )}
             </div>
           </div>
         </div>

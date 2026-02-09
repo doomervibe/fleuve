@@ -35,13 +35,6 @@ class Activity(Activity_):
     """Table for storing action execution tracking."""
     __tablename__ = "activities"
 
-    @declared_attr
-    def resulting_command(cls) -> Mapped:
-        return mapped_column(
-            PydanticType({{project_title_no_spaces}}Command | None),
-            nullable=True,
-        )
-
 
 class DelaySchedule(DelaySchedule_):
     """Table for storing delay schedules."""

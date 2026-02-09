@@ -447,7 +447,8 @@ class TestAsyncRepo:
 
         class AdapterWithSyncDb(Adapter):
             async def act_on(self, event, context=None):
-                return None
+                if False:
+                    yield  # async generator
 
             def to_be_act_on(self, event):
                 return False

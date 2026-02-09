@@ -12,11 +12,14 @@ class {{workflow_class_name}}Adapter(Adapter[{{workflow_class_name}}Event, None]
         self,
         event: ConsumedEvent[{{workflow_class_name}}Event],
         context=None,
-    ) -> None:
-        """Execute side effects for events."""
+    ):
+        """Execute side effects for events; yield zero or more commands to process."""
         # Implement your side effects here
         # Examples: send emails, call APIs, update external systems, etc.
-        pass
+        # Yield commands to trigger follow-up workflow processing, e.g.:
+        # yield SomeCommand(...)
+        if False:
+            yield
 
     def to_be_act_on(self, event: {{workflow_class_name}}Event) -> bool:
         """Determine which events should trigger actions."""

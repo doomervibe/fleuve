@@ -52,7 +52,6 @@ class ActivityResponse(BaseModel):
     error_message: Optional[str] = None
     error_type: Optional[str] = None
     checkpoint: Dict[str, Any] = {}
-    resulting_command: Optional[Dict[str, Any]] = None
 
 
 class DelayResponse(BaseModel):

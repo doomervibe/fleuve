@@ -39,16 +39,6 @@ class TestActivityModel(Activity):
 
     __tablename__ = "test_activities"
 
-    @declared_attr
-    def resulting_command(cls) -> Mapped:
-        # Import here to avoid circular dependency
-        from fleuve.tests.conftest import TestCommand
-
-        return mapped_column(
-            PydanticType(TestCommand),
-            nullable=True,
-        )
-
 
 class TestDelayScheduleModel(DelaySchedule):
     """Database model for storing test workflow delay schedules"""

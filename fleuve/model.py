@@ -1,7 +1,7 @@
 import datetime
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
-from typing import Any, Generic, Literal, TypeVar
+from collections.abc import AsyncIterator
+from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, Field
 
@@ -169,32 +169,17 @@ class ActionContext(BaseModel):
     retry_count: int = 0
     retry_policy: RetryPolicy
 
-    def __init__(self, **data):
-        super().__init__(**data)
-        # Private attribute for checkpoint saver callback (not part of Pydantic model)
-        self._checkpoint_saver: Callable[[dict], Awaitable[None]] | None = None
 
-    def save_checkpoint(self, data: dict) -> None:
-        """Save checkpoint data. This will be persisted and available on resume."""
-        self.checkpoint.update(data)
+class CheckpointYield(BaseModel):
+    """
+    Checkpoint data yielded from act_on to update and optionally persist checkpoint.
 
-    async def save_checkpoint_now(self, data: dict) -> None:
-        """
-        Save checkpoint data and persist it immediately to the database.
-        
-        This method should be used during long-running actions to ensure checkpoint
-        progress is not lost if the process crashes. For regular checkpoint updates
-        that only need to be saved at the end of action execution, use save_checkpoint().
-        
-        Args:
-            data: Dictionary of checkpoint data to save
-        """
-        # Update the checkpoint dict
-        self.save_checkpoint(data)
-        
-        # Persist immediately if checkpoint saver is available
-        if self._checkpoint_saver is not None:
-            await self._checkpoint_saver(self.checkpoint)
+    - save_now=False (default): merge data into context.checkpoint; persisted at end of action.
+    - save_now=True: merge data and persist immediately to the DB.
+    """
+
+    data: dict = Field(default_factory=dict)
+    save_now: bool = False
 
 
 Wf = TypeVar("Wf", bound=Workflow)
@@ -204,19 +189,22 @@ class Adapter(Generic[E, C], ABC):
     @abstractmethod
     async def act_on(
         self, event: ConsumedEvent[E], context: "ActionContext | None" = None
-    ) -> C | None:
+    ) -> AsyncIterator[Union[C, CheckpointYield]]:
         """
-        Execute an action for an event.
+        Execute an action for an event; yield zero or more commands and/or checkpoint updates.
 
         Args:
             event: The event to act on
             context: Optional action context for checkpoint/resume functionality.
                      If None, action is executed without checkpoint support.
 
-        Returns:
-            Optional command to be processed after action completion.
+        Yields:
+            - Commands (C): processed via process_command for the same workflow.
+            - CheckpointYield: merge data into checkpoint; if save_now=True persist
+              immediately, else persist at end of action.
         """
-        pass
+        if False:
+            yield  # make this an async generator; subclasses override and yield commands/checkpoints
 
     @abstractmethod
     def to_be_act_on(self, event: Exception) -> bool:

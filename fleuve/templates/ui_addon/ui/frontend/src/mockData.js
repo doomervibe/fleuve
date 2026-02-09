@@ -237,7 +237,6 @@ export function getMockActivities(workflowId) {
       error_message: null,
       error_type: null,
       checkpoint: { step: 'process_violation' },
-      resulting_command: { type: 'send_notification' },
     },
     {
       workflow_id: workflowId,
@@ -251,7 +250,6 @@ export function getMockActivities(workflowId) {
       error_message: null,
       error_type: null,
       checkpoint: { step: 'send_notification' },
-      resulting_command: { type: 'wait_for_payment' },
     },
     {
       workflow_id: workflowId,
@@ -265,7 +263,6 @@ export function getMockActivities(workflowId) {
       error_message: null,
       error_type: null,
       checkpoint: { step: 'process_payment' },
-      resulting_command: null,
     },
     {
       workflow_id: workflowId,
@@ -279,7 +276,6 @@ export function getMockActivities(workflowId) {
       error_message: null,
       error_type: null,
       checkpoint: {},
-      resulting_command: null,
     },
   ];
 }

@@ -67,13 +67,6 @@ class Activity(Activity_):
     """Table for storing action execution tracking from ALL workflows."""
     __tablename__ = "activities"
 
-    @declared_attr
-    def resulting_command(cls) -> Mapped:
-        return mapped_column(
-            PydanticType(AllCommands | None),
-            nullable=True,
-        )
-
 
 class DelaySchedule(DelaySchedule_):
     """Table for storing delay schedules from ALL workflows."""

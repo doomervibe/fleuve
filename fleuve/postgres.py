@@ -284,16 +284,6 @@ class Activity(Base):
 
     result: Mapped[bytes] = mapped_column(BYTEA, nullable=True)
 
-    # Abstract property - must be implemented by subclasses
-    # Using declared_attr allows proper inheritance and override
-    @declared_attr
-    def resulting_command(cls) -> Mapped[BaseModel | None]:
-        """Abstract body column that must be implemented by subclasses"""
-        raise NotImplementedError(
-            f"Subclass {cls.__name__} must implement the 'body' column "
-            f"with specific database type"
-        )
-
 
 class DelaySchedule(Base):
     __abstract__ = True
