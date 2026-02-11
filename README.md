@@ -349,8 +349,8 @@ class OrderState(StateBase):
 
 **Adapter Methods:**
 
-#### `act_on(event, context?)` — async generator yielding commands and/or checkpoints
-Execute an action for an event; yields zero or more **commands** (each is applied to the same workflow) and/or **CheckpointYield** (checkpoint data). For checkpoints: `CheckpointYield(data=..., save_now=False)` merges data and persists at end of action; `CheckpointYield(data=..., save_now=True)` merges and persists immediately.
+#### `act_on(event, context?)` — async generator yielding commands, checkpoints, and/or timeouts
+Execute an action for an event; yields zero or more **commands** (each is applied to the same workflow), **CheckpointYield** (checkpoint data), and/or **ActionTimeout** (time limit for the remainder of the action). For checkpoints: `CheckpointYield(data=..., save_now=False)` merges data and persists at end of action; `CheckpointYield(data=..., save_now=True)` merges and persists immediately. For timeouts: `yield ActionTimeout(seconds=30.0)` applies `asyncio.wait_for` to the rest of the action; if it does not complete within the given seconds, `TimeoutError` is raised and the action fails (subject to retries).
 
 ```python
 @staticmethod
@@ -509,6 +509,26 @@ async def act_on(self, event: ConsumedEvent, context: ActionContext | None = Non
     
     await self.step3()
 ```
+
+**Using timeouts:**
+
+Yield **ActionTimeout** from `act_on` to run the remainder of the action under a time limit (e.g. for calls to external APIs or long-running work). If the rest of the action does not complete within the given seconds, `TimeoutError` is raised and the activity is marked failed (retries apply per your retry policy).
+
+- `yield ActionTimeout(seconds=30.0)` — the rest of the action must finish within 30 seconds.
+
+```python
+from fleuve import ActionTimeout
+
+async def act_on(self, event: ConsumedEvent, context: ActionContext | None = None):
+    # Optional: do quick work before the timeout
+    yield SomeCommand(...)
+
+    yield ActionTimeout(seconds=30.0)  # remainder must finish in 30s
+    await self.call_slow_external_api()
+    yield CheckpointYield(data={"api_done": True}, save_now=False)
+```
+
+You can yield multiple `ActionTimeout` values; each applies to the following portion of the generator until the next timeout or the end.
 
 ### 6. Repository
 
@@ -1437,7 +1457,7 @@ Repository for workflow state and event persistence.
 Base class for side effect handlers.
 
 **Abstract Methods:**
-- `act_on(event, context?)`: Async generator yielding zero or more **commands** (each applied to the same workflow) and/or **CheckpointYield** (checkpoint data; `save_now=True` = persist immediately, `save_now=False` = persist at end)
+- `act_on(event, context?)`: Async generator yielding zero or more **commands** (each applied to the same workflow), **CheckpointYield** (checkpoint data; `save_now=True` = persist immediately, `save_now=False` = persist at end), and/or **ActionTimeout** (time limit in seconds for the remainder of the action; uses `asyncio.wait_for`; on timeout, `TimeoutError` is raised and the action fails)
 - `to_be_act_on(event) -> bool`: Determine if event should trigger action
 
 #### `ActionContext`
@@ -1460,6 +1480,13 @@ Checkpoint data yielded from `act_on` to update and optionally persist checkpoin
 **Fields:**
 - `data: dict`: Checkpoint data to merge into context.checkpoint
 - `save_now: bool = False`: If True, persist immediately to the DB; if False, persist at end of action
+
+#### `ActionTimeout`
+
+Time limit for the remainder of the action, yielded from `act_on`. The executor runs the rest of the generator inside `asyncio.wait_for(..., timeout=seconds)`. If that portion does not complete in time, `TimeoutError` is raised and the activity is marked failed (retries apply).
+
+**Fields:**
+- `seconds: float`: Timeout in seconds (must be > 0) for the remainder of the action
 
 ### Configuration
 

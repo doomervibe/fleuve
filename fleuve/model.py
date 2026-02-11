@@ -182,6 +182,26 @@ class CheckpointYield(BaseModel):
     save_now: bool = False
 
 
+class ActionTimeout(BaseModel):
+    """
+    Instruct ActionExecutor to apply a timeout to the remainder of the action.
+
+    When yielded from act_on, the executor wraps the rest of the action
+    (consuming the rest of the async generator) in asyncio.wait_for(..., timeout=seconds).
+    If the remainder does not complete within the given time, asyncio.TimeoutError
+    is raised and the action will retry according to the retry policy.
+
+    Example:
+        async def act_on(self, event, context=None):
+            yield SomeCommand(...)
+            yield ActionTimeout(seconds=30.0)  # rest of action must finish in 30s
+            await long_running_work()
+            yield AnotherCommand(...)
+    """
+
+    seconds: float = Field(..., gt=0, description="Timeout in seconds for the remainder of the action.")
+
+
 Wf = TypeVar("Wf", bound=Workflow)
 
 
@@ -189,7 +209,7 @@ class Adapter(Generic[E, C], ABC):
     @abstractmethod
     async def act_on(
         self, event: ConsumedEvent[E], context: "ActionContext | None" = None
-    ) -> AsyncIterator[Union[C, CheckpointYield]]:
+    ) -> AsyncIterator[Union[C, CheckpointYield, "ActionTimeout"]]:
         """
         Execute an action for an event; yield zero or more commands and/or checkpoint updates.
 
@@ -202,6 +222,8 @@ class Adapter(Generic[E, C], ABC):
             - Commands (C): processed via process_command for the same workflow.
             - CheckpointYield: merge data into checkpoint; if save_now=True persist
               immediately, else persist at end of action.
+            - ActionTimeout: apply asyncio.wait_for to the remainder of the action;
+              if the rest does not complete within the given seconds, TimeoutError is raised.
         """
         if False:
             yield  # make this an async generator; subclasses override and yield commands/checkpoints

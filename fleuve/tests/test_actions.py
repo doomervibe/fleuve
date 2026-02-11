@@ -427,3 +427,206 @@ class TestActionExecutor:
             )
             assert activity is not None
             assert activity.checkpoint == {"step1": 1, "step2": 2, "step3": 3}
+
+    @pytest.mark.asyncio
+    async def test_action_timeout_yield_completes_within_timeout(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Test that yielding ActionTimeout applies wait_for to the remainder; action completing within timeout succeeds."""
+        from fleuve.model import ActionTimeout
+        from fleuve.tests.conftest import TestCommand, TestEvent
+
+        class ActionTimeoutAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                yield TestCommand(action="before", value=1)
+                yield ActionTimeout(seconds=1.0)
+                # Remainder completes quickly
+                yield TestCommand(action="after", value=2)
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=ActionTimeoutAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+        )
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=TestEvent(value=10),
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+        )
+
+        await executor.execute_action(event)
+
+        assert mock_repo.process_command.call_count == 2
+        mock_repo.process_command.assert_any_call("wf-1", TestCommand(action="before", value=1))
+        mock_repo.process_command.assert_any_call("wf-1", TestCommand(action="after", value=2))
+
+        from sqlalchemy import select
+        async with test_session_maker() as s:
+            activity = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 1)
+            )
+            assert activity is not None
+            assert activity.status == ActionStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_action_timeout_yield_times_out(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Test that when remainder of action exceeds ActionTimeout.seconds, TimeoutError is raised and action fails after retries."""
+        from fleuve.model import ActionTimeout
+        from fleuve.tests.conftest import TestEvent
+
+        class SlowAfterTimeoutAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                yield ActionTimeout(seconds=0.05)
+                await asyncio.sleep(1.0)  # Longer than 0.05s timeout
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=SlowAfterTimeoutAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+            max_retries=1,
+        )
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=TestEvent(value=10),
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+        )
+
+        # Cap total time so test fails fast if it hangs (retries + backoff can take a few seconds)
+        await asyncio.wait_for(executor.execute_action(event), timeout=15.0)
+
+        from sqlalchemy import select
+        async with test_session_maker() as s:
+            activity = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 1)
+            )
+            assert activity is not None
+            assert activity.status == ActionStatus.FAILED
+
+    @pytest.mark.asyncio
+    async def test_action_timeout_yield_with_command_after(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Test that yielding ActionTimeout then a command processes the command under the timeout."""
+        from fleuve.model import ActionTimeout
+        from fleuve.tests.conftest import TestCommand, TestEvent
+
+        class TimeoutThenCommandAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                yield ActionTimeout(seconds=2.0)
+                yield TestCommand(action="after_timeout", value=42)
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=TimeoutThenCommandAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+        )
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=TestEvent(value=10),
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+        )
+
+        await executor.execute_action(event)
+
+        mock_repo.process_command.assert_called_once_with(
+            "wf-1", TestCommand(action="after_timeout", value=42)
+        )
+
+    @pytest.mark.asyncio
+    async def test_action_timeout_yield_with_checkpoint_after(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Test that ActionTimeout can be followed by CheckpointYield; both are handled under the timeout."""
+        from fleuve.model import ActionTimeout, CheckpointYield
+        from fleuve.tests.conftest import TestEvent
+
+        class TimeoutThenCheckpointAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                yield ActionTimeout(seconds=1.0)
+                yield CheckpointYield(data={"after_timeout": True}, save_now=True)
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=TimeoutThenCheckpointAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+        )
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=TestEvent(value=10),
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+        )
+
+        await executor.execute_action(event)
+
+        from sqlalchemy import select
+        async with test_session_maker() as s:
+            activity = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 1)
+            )
+            assert activity is not None
+            assert activity.status == ActionStatus.COMPLETED
+            assert activity.checkpoint == {"after_timeout": True}

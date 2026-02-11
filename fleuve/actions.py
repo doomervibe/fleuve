@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from fleuve.model import ActionContext, Adapter, CheckpointYield, RetryPolicy
+from fleuve.model import ActionContext, ActionTimeout, Adapter, CheckpointYield, RetryPolicy
 from fleuve.postgres import Activity, StoredEvent
 from fleuve.repo import AsyncRepo
 from fleuve.stream import ConsumedEvent
@@ -158,21 +158,21 @@ class ActionExecutor(Generic[C, Ae]):
                     retry_policy=activity.retry_policy.model_copy(),
                 )
 
-                # Execute the action (with timeout if configured)
-                # act_on is an async generator yielding zero or more commands and/or checkpoints
+                # Execute the action (with optional global timeout; act_on can also yield ActionTimeout)
+                # act_on is an async generator yielding commands, CheckpointYield, and optionally ActionTimeout
                 try:
 
                     async def consume_commands() -> None:
-                        async for item in self._adapter.act_on(event, context):
-                            if isinstance(item, CheckpointYield):
-                                context.checkpoint.update(item.data)
-                                if item.save_now:
-                                    async with self._session_maker() as s:
-                                        await self._save_checkpoint(
-                                            s, workflow_id, event_number, context.checkpoint
-                                        )
-                            else:
-                                await self._repo.process_command(workflow_id, item)
+                        gen = self._adapter.act_on(event, context)
+                        try:
+                            await self._consume_action_generator(
+                                gen,
+                                workflow_id,
+                                event_number,
+                                context,
+                            )
+                        finally:
+                            await gen.aclose()
 
                     if self._action_timeout:
                         await asyncio.wait_for(
@@ -280,6 +280,49 @@ class ActionExecutor(Generic[C, Ae]):
             f"Action failed permanently for {workflow_id}:{event_number} "
             f"after {activity.retry_policy.max_retries + 1} attempts"
         )
+
+    async def _process_action_item(
+        self,
+        item: Any,
+        workflow_id: str,
+        event_number: int,
+        context: ActionContext,
+    ) -> None:
+        """Process one item yielded from act_on (CheckpointYield or command)."""
+        if isinstance(item, CheckpointYield):
+            context.checkpoint.update(item.data)
+            if item.save_now:
+                async with self._session_maker() as s:
+                    await self._save_checkpoint(
+                        s, workflow_id, event_number, context.checkpoint
+                    )
+        else:
+            await self._repo.process_command(workflow_id, item)
+
+    async def _consume_action_generator(
+        self,
+        gen: Any,
+        workflow_id: str,
+        event_number: int,
+        context: ActionContext,
+    ) -> None:
+        """Consume act_on async generator; apply ActionTimeout via asyncio.wait_for."""
+        while True:
+            try:
+                item = await gen.__anext__()
+            except StopAsyncIteration:
+                return
+            if isinstance(item, ActionTimeout):
+                await asyncio.wait_for(
+                    self._consume_action_generator(
+                        gen, workflow_id, event_number, context
+                    ),
+                    timeout=item.seconds,
+                )
+            else:
+                await self._process_action_item(
+                    item, workflow_id, event_number, context
+                )
 
     async def _recovery_loop(self):
         """Periodically check for interrupted actions and resume them."""
