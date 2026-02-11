@@ -160,7 +160,7 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
 
     @classmethod
     @abstractmethod
-    def event_to_cmd(cls, e: EE) -> C:
+    def event_to_cmd(cls, e: EE) -> C | None:
         pass
 
     @staticmethod
