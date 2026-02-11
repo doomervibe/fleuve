@@ -289,6 +289,7 @@ class DelaySchedule(Base):
     __abstract__ = True
 
     workflow_id: Mapped[str] = mapped_column(String(256), primary_key=True, index=True)
+    delay_id: Mapped[str] = mapped_column(String(256), primary_key=True, index=True)
     workflow_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
     delay_until: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, index=True

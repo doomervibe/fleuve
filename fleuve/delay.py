@@ -69,13 +69,16 @@ class DelayScheduler(Generic[C, Se, Ds]):
         delay_event: EvDelay[C],
         event_version: int,
     ):
-        """Register a delay schedule when EvDelay event is emitted."""
+        """Register a delay schedule when EvDelay event is emitted.
+        Multiple delays can coexist per workflow; each is identified by delay_event.id.
+        A delay replaces an existing one only if both belong to the same workflow and
+        their IDs match."""
         async with self._session_maker() as s:
-            # Remove any existing delay schedule for this workflow
+            # Replace only if same workflow AND same delay id
             await s.execute(
-                delete(self._db_delay_schedule_model).where(
-                    self._db_delay_schedule_model.workflow_id == workflow_id
-                )
+                delete(self._db_delay_schedule_model)
+                .where(self._db_delay_schedule_model.workflow_id == workflow_id)
+                .where(self._db_delay_schedule_model.delay_id == delay_event.id)
             )
 
             # Insert new delay schedule
@@ -83,6 +86,7 @@ class DelayScheduler(Generic[C, Se, Ds]):
                 insert(self._db_delay_schedule_model).values(
                     {
                         "workflow_id": workflow_id,
+                        "delay_id": delay_event.id,
                         "workflow_type": self._workflow_type,
                         "delay_until": delay_event.delay_until,
                         "event_version": event_version,
@@ -92,7 +96,7 @@ class DelayScheduler(Generic[C, Se, Ds]):
             )
             await s.commit()
         logger.info(
-            f"Registered delay for workflow {workflow_id} until {delay_event.delay_until}"
+            f"Registered delay {delay_event.id} for workflow {workflow_id} until {delay_event.delay_until}"
         )
 
     async def _run_loop(self):
@@ -146,22 +150,16 @@ class DelayScheduler(Generic[C, Se, Ds]):
             await s.execute(
                 delete(self._db_delay_schedule_model)
                 .where(self._db_delay_schedule_model.workflow_id == workflow_id)
-                .where(
-                    self._db_delay_schedule_model.event_version
-                    == schedule.event_version
-                )
+                .where(self._db_delay_schedule_model.delay_id == schedule.delay_id)
             )
             await s.commit()
             return
 
-        # Emit EvDelayComplete event
-        # Note: EvDelayComplete is abstract, so we create a concrete instance
-        # by subclassing it inline. The type will be set in the concrete class.
-        class ConcreteEvDelayComplete(EvDelayComplete):
-            type: str = "delay_complete"
-        
-        delay_complete_event = ConcreteEvDelayComplete(
+        # Emit EvDelayComplete event (concrete class, emitted by system not workflow)
+        delay_complete_event = EvDelayComplete(
+            delay_id=schedule.delay_id,
             at=datetime.datetime.now(datetime.timezone.utc),
+            next_cmd=schedule.next_command,
         )
 
         await s.execute(
@@ -180,9 +178,7 @@ class DelayScheduler(Generic[C, Se, Ds]):
         await s.execute(
             delete(self._db_delay_schedule_model)
             .where(self._db_delay_schedule_model.workflow_id == workflow_id)
-            .where(
-                self._db_delay_schedule_model.event_version == schedule.event_version
-            )
+            .where(self._db_delay_schedule_model.delay_id == schedule.delay_id)
         )
 
         await s.commit()

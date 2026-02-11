@@ -61,6 +61,7 @@ class TestSideEffects:
             action: str
 
         delay_event = EvDelay(
+            id="delay-1",
             delay_until=datetime.datetime.now(),
             next_cmd=TestCmd(action="test"),
         )
@@ -299,15 +300,19 @@ class TestWorkflowsRunner:
     async def test_workflows_to_notify_delay_complete(self, runner):
         """Test finding workflows to notify for EvDelayComplete."""
         import datetime
+        from pydantic import BaseModel
 
-        # Create concrete EvDelayComplete subclass
-        class ConcreteEvDelayComplete(EvDelayComplete):
-            type: str = "delay_complete"
+        class TestCmd(BaseModel):
+            action: str
 
         event = ConsumedEvent(
             workflow_id="wf-1",
             event_no=1,
-            event=ConcreteEvDelayComplete(at=datetime.datetime.now()),
+            event=EvDelayComplete(
+                delay_id="delay-1",
+                at=datetime.datetime.now(),
+                next_cmd=TestCmd(action="resume"),
+            ),
             global_id=1,
             at=datetime.datetime.now(),
             workflow_type="test_workflow",

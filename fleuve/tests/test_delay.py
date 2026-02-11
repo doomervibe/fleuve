@@ -66,7 +66,11 @@ class TestDelayScheduler:
         from fleuve.tests.conftest import TestCommand
 
         delay_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=30)
-        delay_event = EvDelay(delay_until=delay_until, next_cmd=TestCommand(action="resume", value=10))
+        delay_event = EvDelay(
+            id="delay-1",
+            delay_until=delay_until,
+            next_cmd=TestCommand(action="resume", value=10),
+        )
 
         await delay_scheduler.register_delay(
             workflow_id="wf-1",
@@ -109,6 +113,7 @@ class TestDelayScheduler:
         delay_until = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)  # Past
         schedule = delay_scheduler._db_delay_schedule_model(
             workflow_id="wf-1",
+            delay_id="delay-1",
             workflow_type="test_workflow",
             delay_until=delay_until,
             event_version=5,
@@ -156,6 +161,7 @@ class TestDelayScheduler:
         delay_until = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)  # Past
         schedule = delay_scheduler._db_delay_schedule_model(
             workflow_id="wf-1",
+            delay_id="delay-1",
             workflow_type="test_workflow",
             delay_until=delay_until,
             event_version=5,

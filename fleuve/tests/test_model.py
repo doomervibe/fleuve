@@ -75,21 +75,20 @@ class TestBuiltInEvents:
         assert event.target_workflow_id == "wf-123"
         assert event.target_workflow_type == "test_workflow"
 
-    def test_ev_delay_complete_is_abstract(self):
-        """Test that EvDelayComplete is an ABC and can be subclassed."""
-        from typing import Literal
+    def test_ev_delay_complete_is_concrete(self):
+        """Test that EvDelayComplete is a concrete class (not ABC), emitted by the system."""
+        # EvDelayComplete is not an ABC - workflows receive it, don't subclass it
+        assert ABC not in EvDelayComplete.__bases__
 
-        # Verify it's an ABC
-        assert ABC in EvDelayComplete.__bases__
-
-        # Create a concrete subclass
-        class ConcreteDelayComplete(EvDelayComplete):
-            type: Literal["concrete_delay_complete"] = "concrete_delay_complete"
+        from fleuve.tests.conftest import TestCommand
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        event = ConcreteDelayComplete(at=now)
-        assert event.type == "concrete_delay_complete"
+        cmd = TestCommand(action="resume", value=42)
+        event = EvDelayComplete(delay_id="reminder-1", at=now, next_cmd=cmd)
+        assert event.type == "delay_complete"
+        assert event.delay_id == "reminder-1"
         assert event.at == now
+        assert event.next_cmd == cmd
 
     def test_ev_delay_is_abstract(self):
         """Test that EvDelay is an ABC and can be subclassed."""
@@ -108,7 +107,7 @@ class TestBuiltInEvents:
 
         delay_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=30)
         next_cmd = TestCmd(action="resume")
-        event = ConcreteDelay(delay_until=delay_until, next_cmd=next_cmd)
+        event = ConcreteDelay(id="delay-1", delay_until=delay_until, next_cmd=next_cmd)
         assert event.type == "concrete_delay"
         assert event.delay_until == delay_until
         assert event.next_cmd == next_cmd

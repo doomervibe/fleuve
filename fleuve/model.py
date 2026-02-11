@@ -25,18 +25,22 @@ class EventBase(BaseModel, ABC):
             return
 
         # Skip validation for ABC classes (built-in abstract events meant to be subclassed)
-        # Also check if the class name suggests it's a generic instance (e.g., "EvDelay[...]")
         if (
             ABC in cls.__bases__
             or ("EvDelay[" in cls.__name__)
             or ("EvDirectMessage[" in cls.__name__)
-            or ("EvDelayComplete[" in cls.__name__)
         ):
             return
 
         # Did the subclass actually override the annotation?
         annotation = cls.__annotations__.get("type")
         if annotation is None:
+            # Generic subclasses (e.g. EvDelayComplete[C]) may not inherit annotations.
+            # Allow if model_fields has type with a default.
+            model_fields = getattr(cls, "model_fields", {})
+            type_field = model_fields.get("type")
+            if type_field is not None and not type_field.is_required():
+                return
             raise TypeError(
                 f"{cls.__name__} must override `type` with a Literal[...] default."
             )
@@ -104,11 +108,18 @@ class EvDirectMessage(EventBase, ABC):
     target_workflow_type: str
 
 
-class EvDelayComplete(EventBase, ABC):
+class EvDelayComplete(EventBase, Generic[C]):
+    """Concrete event emitted by the system (DelayScheduler) when a delay expires.
+    Not an ABC - workflows do not emit this; they only receive it."""
+
+    type: Literal["delay_complete"] = "delay_complete"
+    delay_id: str
     at: datetime.datetime
+    next_cmd: C
 
 
 class EvDelay(EventBase, Generic[C], ABC):
+    id: str  # Unique ID for this delay (workflow-provided); enables multiple delays per workflow
     delay_until: datetime.datetime
     next_cmd: C
 

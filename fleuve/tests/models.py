@@ -2,10 +2,13 @@
 SQLAlchemy database models for testing.
 These models are used by test fixtures and are not test classes themselves.
 """
+from typing import Union
+
 from sqlalchemy import BigInteger, String
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import Mapped, mapped_column
 
+from fleuve.model import EvDelayComplete
 from fleuve.postgres import (
     Activity,
     Base,
@@ -26,10 +29,12 @@ class DbEventModel(StoredEvent):
     @declared_attr
     def body(cls) -> Mapped:
         # Import here to avoid circular dependency
-        from fleuve.tests.conftest import TestEvent
+        from fleuve.tests.conftest import TestCommand, TestEvent
 
+        # Body can be TestEvent (workflow events) or EvDelayComplete (system-emitted)
+        # EvDelayComplete first so it matches when type="delay_complete"
         return mapped_column(
-            PydanticType(TestEvent),
+            PydanticType(Union[EvDelayComplete[TestCommand], TestEvent]),
             nullable=False,
         )
 
