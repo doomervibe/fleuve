@@ -124,6 +124,15 @@ class EvDelay(EventBase, Generic[C], ABC):
     next_cmd: C
 
 
+class EvActionCancel(EventBase):
+    """Emitted by a workflow to cancel its in-flight actions."""
+
+    type: Literal["action_cancel"] = "action_cancel"
+    # If None or empty: cancel all actions for this workflow.
+    # If non-empty: cancel only actions for these event versions (workflow_version = event_no).
+    event_numbers: list[int] | None = None
+
+
 class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
     @classmethod
     @abstractmethod

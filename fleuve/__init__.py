@@ -15,6 +15,7 @@ from fleuve.model import (
     Adapter,
     CheckpointYield,
     EventBase,
+    EvActionCancel,
     EvDelay,
     EvDelayComplete,
     EvDirectMessage,
@@ -67,6 +68,7 @@ from fleuve.stream import Reader, Readers, ConsumedEvent, Sleeper
 
 # Actions
 from fleuve.actions import ActionExecutor, ActionStatus
+from fleuve.action_utils import run_with_background_check
 
 # Delay
 from fleuve.delay import DelayScheduler
@@ -108,6 +110,7 @@ __all__ = [
     "Rejection",
     "AlreadyExists",
     "CheckpointYield",
+    "EvActionCancel",
     "EvDelay",
     "EvDelayComplete",
     "EvDirectMessage",
@@ -150,6 +153,7 @@ __all__ = [
     # Actions
     "ActionExecutor",
     "ActionStatus",
+    "run_with_background_check",
     # Delay
     "DelayScheduler",
     # Scaling

@@ -473,12 +473,11 @@ class TestAsyncRepo:
 
         result = await repo.create_new(TestCommand(action="create", value=10), "wf-adapter-1")
         assert not isinstance(result, Rejection)
-        rows = (
-            await test_session.execute(
-                select(WorkflowSyncLogModel).where(
-                    WorkflowSyncLogModel.workflow_id == "wf-adapter-1"
-                )
+        rows_result = await test_session.execute(
+            select(WorkflowSyncLogModel).where(
+                WorkflowSyncLogModel.workflow_id == "wf-adapter-1"
             )
         )
-        assert len(rows.scalars().all()) == 1
-        assert rows.scalars().one().events_count == 1
+        rows = rows_result.scalars().all()
+        assert len(rows) == 1
+        assert rows[0].events_count == 1

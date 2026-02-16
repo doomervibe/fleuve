@@ -7,7 +7,14 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.ext.asyncio.session import AsyncSession
 
-from fleuve.model import Adapter, EvDirectMessage, EvDelay, EvDelayComplete, Workflow
+from fleuve.model import (
+    Adapter,
+    EvActionCancel,
+    EvDirectMessage,
+    EvDelay,
+    EvDelayComplete,
+    Workflow,
+)
 from fleuve.postgres import (
     Activity,
     DelaySchedule,
@@ -154,13 +161,19 @@ class SideEffects:
         return delay_exit or action_exit
 
     async def maybe_act_on(self, event: ConsumedEvent):
+        if isinstance(event.event, EvActionCancel):
+            await self.action_executor.cancel_workflow_actions(
+                event.workflow_id,
+                event_numbers=event.event.event_numbers,
+            )
+            return
         if isinstance(event.event, EvDelay):
             await self.delay_scheduler.register_delay(
                 workflow_id=event.workflow_id,
                 delay_event=event.event,
                 event_version=event.event_no,
             )
-        if self.action_executor.to_be_act_on(event.event):
+        if self.action_executor.to_be_act_on(event):
             # ActionExecutor handles idempotency, retries, and recovery
             await self.action_executor.execute_action(event)
 

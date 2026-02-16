@@ -630,3 +630,166 @@ class TestActionExecutor:
             assert activity is not None
             assert activity.status == ActionStatus.COMPLETED
             assert activity.checkpoint == {"after_timeout": True}
+
+    @pytest.mark.asyncio
+    async def test_cancel_workflow_actions_marks_pending_as_cancelled(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Test that cancel_workflow_actions marks PENDING activities as CANCELLED."""
+        from fleuve.tests.conftest import TestEvent
+
+        adapter = MockAdapter()
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=adapter,
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+        )
+
+        # Create a PENDING activity in database
+        activity = test_activity_model(
+            workflow_id="wf-1",
+            event_number=1,
+            status=ActionStatus.PENDING.value,
+            max_retries=3,
+        )
+        async with test_session_maker() as s:
+            s.add(activity)
+            await s.commit()
+
+        await executor.cancel_workflow_actions("wf-1")
+
+        from sqlalchemy import select
+
+        async with test_session_maker() as s:
+            activity = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 1)
+            )
+            assert activity is not None
+            assert activity.status == ActionStatus.CANCELLED.value
+
+    @pytest.mark.asyncio
+    async def test_cancel_workflow_actions_cancels_running_task(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Test that cancel_workflow_actions cancels a running action task."""
+        from fleuve.tests.conftest import TestEvent
+
+        class SlowAdapter(MockAdapter):
+            async def act_on(self, event, context=None):
+                self.called_events.append((event, context))
+                await asyncio.sleep(10)
+
+        adapter = SlowAdapter()
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=adapter,
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+        )
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=TestEvent(value=10),
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+        )
+
+        # Start action in background
+        action_task = asyncio.create_task(executor.execute_action(event))
+
+        # Wait for action to start
+        await asyncio.sleep(0.3)
+
+        # Cancel
+        await executor.cancel_workflow_actions("wf-1")
+
+        # Action task should complete with CancelledError
+        with pytest.raises(asyncio.CancelledError):
+            await action_task
+
+        # Verify activity is CANCELLED
+        from sqlalchemy import select
+
+        async with test_session_maker() as s:
+            activity = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 1)
+            )
+            assert activity is not None
+            assert activity.status == ActionStatus.CANCELLED.value
+
+    @pytest.mark.asyncio
+    async def test_cancel_workflow_actions_specific_event_numbers(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Test that cancel_workflow_actions with event_numbers cancels only those."""
+        adapter = MockAdapter()
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=adapter,
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+        )
+
+        # Create PENDING activities for events 1 and 2
+        async with test_session_maker() as s:
+            s.add(
+                test_activity_model(
+                    workflow_id="wf-1",
+                    event_number=1,
+                    status=ActionStatus.PENDING.value,
+                    max_retries=3,
+                )
+            )
+            s.add(
+                test_activity_model(
+                    workflow_id="wf-1",
+                    event_number=2,
+                    status=ActionStatus.PENDING.value,
+                    max_retries=3,
+                )
+            )
+            await s.commit()
+
+        # Cancel only event 1
+        await executor.cancel_workflow_actions("wf-1", event_numbers=[1])
+
+        from sqlalchemy import select
+
+        async with test_session_maker() as s:
+            act1 = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 1)
+            )
+            act2 = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 2)
+            )
+            assert act1.status == ActionStatus.CANCELLED.value
+            assert act2.status == ActionStatus.PENDING.value

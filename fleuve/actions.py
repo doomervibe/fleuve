@@ -26,6 +26,7 @@ class ActionStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     RETRYING = "retrying"
+    CANCELLED = "cancelled"
 
 
 class ActionExecutor(Generic[C, Ae]):
@@ -121,6 +122,50 @@ class ActionExecutor(Generic[C, Ae]):
             await task
         finally:
             self._running_actions.pop(action_key, None)
+
+    async def cancel_workflow_actions(
+        self, workflow_id: str, event_numbers: list[int] | None = None
+    ) -> None:
+        """
+        Cancel actions for a workflow.
+        If event_numbers is None or empty: cancel all.
+        If event_numbers is non-empty: cancel only those specific event versions.
+        """
+        if event_numbers:
+            keys_to_cancel = [(workflow_id, ev_no) for ev_no in event_numbers]
+        else:
+            keys_to_cancel = [
+                (wf_id, ev_no)
+                for (wf_id, ev_no) in self._running_actions
+                if wf_id == workflow_id
+            ]
+
+        for key in keys_to_cancel:
+            task = self._running_actions.get(key)
+            if task:
+                task.cancel()
+
+        # Mark activities as CANCELLED in DB
+        async with self._session_maker() as s:
+            q = (
+                update(self._db_activity_model)
+                .where(self._db_activity_model.workflow_id == workflow_id)
+                .where(
+                    self._db_activity_model.status.in_(
+                        [
+                            ActionStatus.RUNNING.value,
+                            ActionStatus.RETRYING.value,
+                            ActionStatus.PENDING.value,
+                        ]
+                    )
+                )
+            )
+            if event_numbers:
+                q = q.where(
+                    self._db_activity_model.event_number.in_(event_numbers)
+                )
+            await s.execute(q.values(status=ActionStatus.CANCELLED.value))
+            await s.commit()
 
     async def _run_action_with_retry(self, event: ConsumedEvent) -> None:
         """Run action with retry logic and checkpoint support."""
@@ -223,6 +268,9 @@ class ActionExecutor(Generic[C, Ae]):
                     f"(retry_count={retry_count})"
                 )
                 return
+
+            except asyncio.CancelledError:
+                raise  # Propagate; do not retry
 
             except asyncio.TimeoutError:
                 last_exception = asyncio.TimeoutError("Action execution timed out")

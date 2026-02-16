@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fleuve.model import EvDelay, EvDelayComplete, EvDirectMessage
+from fleuve.model import EvActionCancel, EvDelay, EvDelayComplete, EvDirectMessage
 from fleuve.runner import SideEffects, WorkflowsRunner
 from fleuve.stream import ConsumedEvent
 
@@ -20,6 +20,7 @@ class TestSideEffects:
         executor = AsyncMock()
         executor.to_be_act_on = MagicMock(return_value=False)
         executor.execute_action = AsyncMock()
+        executor.cancel_workflow_actions = AsyncMock()
         executor.__aenter__ = AsyncMock(return_value=executor)
         executor.__aexit__ = AsyncMock(return_value=False)
         return executor
@@ -122,6 +123,50 @@ class TestSideEffects:
 
         mock_action_executor.to_be_act_on.return_value = False
         await side_effects.maybe_act_on(consumed_event)
+        mock_action_executor.execute_action.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_maybe_act_on_ev_action_cancel(self, side_effects, mock_action_executor):
+        """Test that EvActionCancel triggers cancel_workflow_actions."""
+        import datetime
+
+        consumed_event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=EvActionCancel(),
+            global_id=1,
+            at=datetime.datetime.now(),
+            workflow_type="test_workflow",
+        )
+
+        await side_effects.maybe_act_on(consumed_event)
+
+        mock_action_executor.cancel_workflow_actions.assert_called_once_with(
+            "wf-1", event_numbers=None
+        )
+        mock_action_executor.execute_action.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_maybe_act_on_ev_action_cancel_specific_events(
+        self, side_effects, mock_action_executor
+    ):
+        """Test that EvActionCancel with event_numbers passes them to cancel."""
+        import datetime
+
+        consumed_event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=EvActionCancel(event_numbers=[3, 5]),
+            global_id=1,
+            at=datetime.datetime.now(),
+            workflow_type="test_workflow",
+        )
+
+        await side_effects.maybe_act_on(consumed_event)
+
+        mock_action_executor.cancel_workflow_actions.assert_called_once_with(
+            "wf-1", event_numbers=[3, 5]
+        )
         mock_action_executor.execute_action.assert_not_called()
 
 
