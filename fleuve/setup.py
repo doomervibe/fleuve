@@ -18,31 +18,44 @@ Example:
         runner = resources.runner
         # Use repo and runner...
 """
+
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, Type
 
 from nats.aio.client import Client as NATS
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from fleuve.config import WorkflowConfig, make_runner_from_config
+from fleuve.jetstream import JetStreamPublisher
 from fleuve.model import Adapter, StateBase, Workflow
 from fleuve.postgres import (
     Activity,
     Base,
     DelaySchedule,
     Offset,
+    Snapshot,
     StoredEvent,
     Subscription,
 )
+from fleuve.reconciliation import ReconciliationService
 from fleuve.repo import AsyncRepo, EuphStorageNATS, SyncDbHandler
 from fleuve.runner import WorkflowsRunner
+from fleuve.tracing import FleuveTracer
+from fleuve.truncation import TruncationService
 
 
 @dataclass
 class WorkflowRunnerResources:
     """Resources created by create_workflow_runner."""
+
     repo: AsyncRepo
     runner: WorkflowsRunner
     session_maker: async_sessionmaker[AsyncSession]
@@ -51,6 +64,7 @@ class WorkflowRunnerResources:
     nc: NATS
     outbox_publisher: "JetStreamPublisher | None" = None
     reconciliation_service: "ReconciliationService | None" = None
+    truncation_service: TruncationService | None = None
 
 
 @asynccontextmanager
@@ -82,13 +96,22 @@ async def create_workflow_runner(
     external_message_parser: Any = None,
     db_external_subscription_model: Type[Any] | None = None,
     sync_db: SyncDbHandler | None = None,
+    # Snapshotting
+    db_snapshot_model: Type[Snapshot] | None = None,
+    snapshot_interval: int = 0,
+    # Event truncation (requires snapshotting)
+    enable_truncation: bool = False,
+    truncation_min_retention: timedelta = timedelta(days=7),
+    truncation_batch_size: int = 1000,
+    truncation_check_interval: timedelta = timedelta(hours=1),
+    enable_otel: bool = False,
     **runner_kwargs: Any,
 ):
     """Create a workflow runner with all necessary infrastructure.
-    
+
     This is a convenience function that sets up everything needed to run a
     Fleuve workflow with minimal boilerplate.
-    
+
     Args:
         workflow_type: The workflow class
         state_type: The state class
@@ -114,11 +137,17 @@ async def create_workflow_runner(
         external_stream_name: JetStream stream name for external messages (default: external_{workflow_type})
         external_message_parser: Callable[[bytes], BaseModel] or Pydantic type to parse external message payload
         sync_db: Optional async (session, workflow_id, old_state, new_state, events) -> None; runs in same transaction as event insert for strongly consistent denormalized/auxiliary DB updates
+        db_snapshot_model: SQLAlchemy model for snapshots table (optional, enables snapshotting)
+        snapshot_interval: Snapshot every N events per workflow (0 = disabled)
+        enable_truncation: Enable background event truncation (requires snapshotting)
+        truncation_min_retention: Minimum age before events can be truncated (default: 7 days)
+        truncation_batch_size: Max events to delete per workflow per cycle (default: 1000)
+        truncation_check_interval: How often the truncation loop runs (default: 1 hour)
         **runner_kwargs: Additional kwargs to pass to make_runner_from_config
-        
+
     Yields:
         WorkflowRunnerResources: Container with repo, runner, and other resources
-        
+
     Example:
         async with create_workflow_runner(
             workflow_type=MyWorkflow,
@@ -135,7 +164,7 @@ async def create_workflow_runner(
                 cmd=MyCommand(),
                 workflow_id="my-workflow-1",
             )
-            
+
             # Run the runner
             await resources.runner.run()
     """
@@ -144,31 +173,34 @@ async def create_workflow_runner(
         "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/fleuve"
     )
     nats_url = nats_url or os.getenv("NATS_URL", "nats://localhost:4222")
-    
+
     # Default bucket name from workflow
     if nats_bucket is None:
         nats_bucket = f"{workflow_type.name()}_states"
-    
+
     # Create database engine and session maker
     engine = create_async_engine(database_url, echo=engine_echo)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
-    
+
     # Create database tables if requested
     if create_tables:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-    
+
     # Connect to NATS
     nc = NATS()
     await nc.connect(nats_url)
-    
+
     try:
         # Create ephemeral storage for workflow state
         ephemeral_storage = EuphStorageNATS(nc, nats_bucket, state_type)
         await ephemeral_storage.__aenter__()
-        
+
         try:
-            # Create repository (sync_db from adapter.sync_db when sync_db not provided)
+            tracer = None
+            if enable_otel:
+                tracer = FleuveTracer(workflow_type=workflow_type.name(), enable=True)
+
             repo = AsyncRepo(
                 session_maker=session_maker,
                 es=ephemeral_storage,
@@ -179,18 +211,19 @@ async def create_workflow_runner(
                 db_external_sub_model=db_external_subscription_model,
                 sync_db=sync_db,
                 adapter=adapter,
+                db_snapshot_model=db_snapshot_model,
+                snapshot_interval=snapshot_interval,
+                db_delay_schedule_model=db_delay_schedule_model,
+                tracer=tracer,
             )
-            
+
             # Create OutboxPublisher if JetStream enabled
             outbox_publisher = None
             reconciliation_service = None
-            
+
             if enable_jetstream:
-                from fleuve.jetstream import JetStreamPublisher
-                from fleuve.reconciliation import ReconciliationService
-                
                 stream_name = jetstream_stream_name or f"{workflow_type.name()}_stream"
-                
+
                 outbox_publisher = JetStreamPublisher(
                     nats_client=nc,
                     session_maker=session_maker,
@@ -203,7 +236,7 @@ async def create_workflow_runner(
                 )
                 await outbox_publisher.__aenter__()
                 await outbox_publisher.start()
-                
+
                 if enable_reconciliation:
                     reconciliation_service = ReconciliationService(
                         session_maker=session_maker,
@@ -211,9 +244,9 @@ async def create_workflow_runner(
                         workflow_type=workflow_type.name(),
                     )
                     await reconciliation_service.start()
-            
+
+            truncation_service = None
             try:
-                # Create workflow configuration
                 config = WorkflowConfig(
                     nats_bucket=nats_bucket,
                     workflow_type=workflow_type,
@@ -228,15 +261,20 @@ async def create_workflow_runner(
                     external_messaging_enabled=enable_external_messaging,
                     external_stream_name=external_stream_name,
                     external_message_parser=external_message_parser,
+                    db_snapshot_model=db_snapshot_model,
+                    snapshot_interval=snapshot_interval,
+                    tracer=tracer,
                 )
-                nats_for_runner = nc if (enable_jetstream or enable_external_messaging) else None
-                # Create runner with JetStream and/or external messaging configuration
+                nats_for_runner = (
+                    nc if (enable_jetstream or enable_external_messaging) else None
+                )
                 runner = make_runner_from_config(
                     config=config,
                     repo=repo,
                     session_maker=session_maker,
                     jetstream_enabled=enable_jetstream,
-                    jetstream_stream_name=jetstream_stream_name or f"{workflow_type.name()}_stream",
+                    jetstream_stream_name=jetstream_stream_name
+                    or f"{workflow_type.name()}_stream",
                     nats_client=nats_for_runner,
                     batch_size=outbox_batch_size,
                     external_messaging_enabled=enable_external_messaging,
@@ -244,8 +282,20 @@ async def create_workflow_runner(
                     external_message_parser=external_message_parser,
                     **runner_kwargs,
                 )
-                
-                # Yield resources in async context manager
+
+                if enable_truncation and db_snapshot_model:
+                    truncation_service = TruncationService(
+                        session_maker=session_maker,
+                        event_model=db_event_model,
+                        snapshot_model=db_snapshot_model,
+                        offset_model=db_offset_model,
+                        workflow_type=workflow_type.name(),
+                        min_retention=truncation_min_retention,
+                        batch_size=truncation_batch_size,
+                        check_interval=truncation_check_interval,
+                    )
+                    await truncation_service.start()
+
                 async with runner:
                     yield WorkflowRunnerResources(
                         repo=repo,
@@ -256,9 +306,11 @@ async def create_workflow_runner(
                         nc=nc,
                         outbox_publisher=outbox_publisher,
                         reconciliation_service=reconciliation_service,
+                        truncation_service=truncation_service,
                     )
             finally:
-                # Clean up JetStream components
+                if truncation_service:
+                    await truncation_service.stop()
                 if reconciliation_service:
                     await reconciliation_service.stop()
                 if outbox_publisher:

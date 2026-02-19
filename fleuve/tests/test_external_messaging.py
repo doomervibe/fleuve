@@ -1,4 +1,5 @@
 """Tests for external NATS messaging: parse_subject, resolve_workflow_ids, ExternalSub, ExternalSubscription, repo sync, ExternalMessageConsumer."""
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,7 +29,10 @@ class TestParseSubject:
         assert parse_subject("messages.orders.all._", "orders") == ("all", "_")
 
     def test_parse_subject_tag(self):
-        assert parse_subject("messages.orders.tag.urgent", "orders") == ("tag", "urgent")
+        assert parse_subject("messages.orders.tag.urgent", "orders") == (
+            "tag",
+            "urgent",
+        )
 
     def test_parse_subject_id(self):
         assert parse_subject("messages.orders.id.order-123", "orders") == (
@@ -87,9 +91,7 @@ class TestResolveWorkflowIds:
     """Tests for resolve_workflow_ids with test database."""
 
     @pytest.mark.asyncio
-    async def test_resolve_workflow_ids_all(
-        self, test_session_maker, test_engine
-    ):
+    async def test_resolve_workflow_ids_all(self, test_session_maker, test_engine):
         from fleuve.tests.conftest import TestEvent
         from fleuve.tests.models import DbEventModel
 
@@ -146,18 +148,28 @@ class TestResolveWorkflowIds:
         assert ids == ["target-wf"]
 
     @pytest.mark.asyncio
-    async def test_resolve_workflow_ids_topic(
-        self, test_session_maker, test_engine
-    ):
+    async def test_resolve_workflow_ids_topic(self, test_session_maker, test_engine):
         from fleuve.tests.models import DbEventModel, TestExternalSubscriptionModel
 
         async with test_session_maker() as s:
             await s.execute(
                 TestExternalSubscriptionModel.__table__.insert().values(
                     [
-                        {"workflow_id": "sub1", "workflow_type": "test", "topic": "order.created"},
-                        {"workflow_id": "sub2", "workflow_type": "test", "topic": "order.created"},
-                        {"workflow_id": "sub3", "workflow_type": "test", "topic": "other.topic"},
+                        {
+                            "workflow_id": "sub1",
+                            "workflow_type": "test",
+                            "topic": "order.created",
+                        },
+                        {
+                            "workflow_id": "sub2",
+                            "workflow_type": "test",
+                            "topic": "order.created",
+                        },
+                        {
+                            "workflow_id": "sub3",
+                            "workflow_type": "test",
+                            "topic": "other.topic",
+                        },
                     ]
                 )
             )
@@ -206,7 +218,12 @@ class TestRepoExternalSubscriptions:
     ):
         """When state has external_subscriptions, repo persists them to the external subscription table."""
         import uuid
-        from fleuve.tests.conftest import TestCommand, TestEvent, TestState, TestWorkflow
+        from fleuve.tests.conftest import (
+            TestCommand,
+            TestEvent,
+            TestState,
+            TestWorkflow,
+        )
         from fleuve.tests.models import (
             DbEventModel,
             TestExternalSubscriptionModel,
@@ -253,11 +270,17 @@ class TestRepoExternalSubscriptions:
                 db_sub_model=TestSubscriptionModel,
                 db_external_sub_model=TestExternalSubscriptionModel,
             )
-            result = await repo.create_new(TestCommand(action="start", value=1), "wf-ext-1")
+            result = await repo.create_new(
+                TestCommand(action="start", value=1), "wf-ext-1"
+            )
             assert not isinstance(result, Rejection)
 
             async with test_session_maker() as s:
-                rows = (await s.execute(select(TestExternalSubscriptionModel))).scalars().all()
+                rows = (
+                    (await s.execute(select(TestExternalSubscriptionModel)))
+                    .scalars()
+                    .all()
+                )
                 assert len(rows) == 2
                 topics = {r.topic for r in rows}
                 assert topics == {"order.created", "payment.done"}

@@ -1,6 +1,7 @@
 """
 Unit tests for les.runner module.
 """
+
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -43,7 +44,9 @@ class TestSideEffects:
         )
 
     @pytest.mark.asyncio
-    async def test_context_manager(self, side_effects, mock_action_executor, mock_delay_scheduler):
+    async def test_context_manager(
+        self, side_effects, mock_action_executor, mock_delay_scheduler
+    ):
         """Test SideEffects as async context manager."""
         async with side_effects:
             mock_action_executor.__aenter__.assert_called_once()
@@ -103,7 +106,9 @@ class TestSideEffects:
         mock_action_executor.execute_action.assert_called_once_with(consumed_event)
 
     @pytest.mark.asyncio
-    async def test_maybe_act_on_skips_if_not_to_act(self, side_effects, mock_action_executor):
+    async def test_maybe_act_on_skips_if_not_to_act(
+        self, side_effects, mock_action_executor
+    ):
         """Test that events not to be acted on are skipped."""
         from pydantic import BaseModel
         import datetime
@@ -126,7 +131,9 @@ class TestSideEffects:
         mock_action_executor.execute_action.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_maybe_act_on_ev_action_cancel(self, side_effects, mock_action_executor):
+    async def test_maybe_act_on_ev_action_cancel(
+        self, side_effects, mock_action_executor
+    ):
         """Test that EvActionCancel triggers cancel_workflow_actions."""
         import datetime
 
@@ -193,6 +200,7 @@ class TestWorkflowsRunner:
     def mock_workflow_type(self):
         """Create a mock workflow type."""
         from fleuve.tests.conftest import TestWorkflow
+
         return TestWorkflow
 
     @pytest.fixture
@@ -318,7 +326,9 @@ class TestWorkflowsRunner:
         assert not runner.to_be_act_on(event2)
 
     @pytest.mark.asyncio
-    async def test_workflows_to_notify_direct_message(self, runner, test_session, clean_tables):
+    async def test_workflows_to_notify_direct_message(
+        self, runner, test_session, clean_tables
+    ):
         """Test finding workflows to notify for EvDirectMessage."""
         import datetime
 
@@ -376,181 +386,189 @@ class TestWorkflowsRunner:
 
 class TestCachedSubscription:
     """Tests for CachedSubscription class."""
-    
+
     def test_matches_event_basic(self):
         """Test basic event matching without tags."""
         from fleuve.runner import CachedSubscription
-        
+
         sub = CachedSubscription(
             workflow_id="wf-1",
             subscribed_to_workflow="source-wf",
             subscribed_to_event_type="payment.completed",
             tags=[],
-            tags_all=[]
+            tags_all=[],
         )
-        
+
         # Should match
         assert sub.matches_event("source-wf", "payment.completed", set(), set())
-        
+
         # Should not match - different workflow
         assert not sub.matches_event("other-wf", "payment.completed", set(), set())
-        
+
         # Should not match - different event type
         assert not sub.matches_event("source-wf", "payment.failed", set(), set())
-    
+
     def test_matches_event_wildcard_workflow(self):
         """Test matching with wildcard workflow."""
         from fleuve.runner import CachedSubscription
-        
+
         sub = CachedSubscription(
             workflow_id="wf-1",
             subscribed_to_workflow="*",
             subscribed_to_event_type="payment.completed",
             tags=[],
-            tags_all=[]
+            tags_all=[],
         )
-        
+
         # Should match any workflow
         assert sub.matches_event("any-wf", "payment.completed", set(), set())
         assert sub.matches_event("other-wf", "payment.completed", set(), set())
-        
+
         # Should not match different event type
         assert not sub.matches_event("any-wf", "payment.failed", set(), set())
-    
+
     def test_matches_event_wildcard_event_type(self):
         """Test matching with wildcard event type."""
         from fleuve.runner import CachedSubscription
-        
+
         sub = CachedSubscription(
             workflow_id="wf-1",
             subscribed_to_workflow="source-wf",
             subscribed_to_event_type="*",
             tags=[],
-            tags_all=[]
+            tags_all=[],
         )
-        
+
         # Should match any event type from source-wf
         assert sub.matches_event("source-wf", "payment.completed", set(), set())
         assert sub.matches_event("source-wf", "payment.failed", set(), set())
-        
+
         # Should not match different workflow
         assert not sub.matches_event("other-wf", "payment.completed", set(), set())
-    
+
     def test_matches_event_with_tags_any(self):
         """Test matching with tags (OR logic)."""
         from fleuve.runner import CachedSubscription
-        
+
         sub = CachedSubscription(
             workflow_id="wf-1",
             subscribed_to_workflow="*",
             subscribed_to_event_type="*",
             tags=["urgent", "high-priority"],
-            tags_all=[]
+            tags_all=[],
         )
-        
+
         # Should match if ANY tag matches
         assert sub.matches_event("any-wf", "any-event", {"urgent"}, set())
         assert sub.matches_event("any-wf", "any-event", {"high-priority"}, set())
         assert sub.matches_event("any-wf", "any-event", {"urgent", "other"}, set())
-        
+
         # Should match if tag is in workflow tags
         assert sub.matches_event("any-wf", "any-event", set(), {"urgent"})
-        
+
         # Should not match if no tags match
         assert not sub.matches_event("any-wf", "any-event", {"other"}, set())
         assert not sub.matches_event("any-wf", "any-event", set(), {"other"})
-    
+
     def test_matches_event_with_tags_all(self):
         """Test matching with tags_all (AND logic)."""
         from fleuve.runner import CachedSubscription
-        
+
         sub = CachedSubscription(
             workflow_id="wf-1",
             subscribed_to_workflow="*",
             subscribed_to_event_type="*",
             tags=[],
-            tags_all=["production", "us-east"]
+            tags_all=["production", "us-east"],
         )
-        
+
         # Should match only if ALL tags match
-        assert sub.matches_event("any-wf", "any-event", {"production", "us-east"}, set())
-        assert sub.matches_event("any-wf", "any-event", {"production", "us-east", "other"}, set())
-        
+        assert sub.matches_event(
+            "any-wf", "any-event", {"production", "us-east"}, set()
+        )
+        assert sub.matches_event(
+            "any-wf", "any-event", {"production", "us-east", "other"}, set()
+        )
+
         # Should match if tags spread across event and workflow tags
         assert sub.matches_event("any-wf", "any-event", {"production"}, {"us-east"})
-        
+
         # Should not match if missing any required tag
         assert not sub.matches_event("any-wf", "any-event", {"production"}, set())
         assert not sub.matches_event("any-wf", "any-event", {"us-east"}, set())
         assert not sub.matches_event("any-wf", "any-event", set(), {"production"})
-    
+
     def test_matches_event_combined_tags(self):
         """Test matching with both tags and tags_all."""
         from fleuve.runner import CachedSubscription
-        
+
         sub = CachedSubscription(
             workflow_id="wf-1",
             subscribed_to_workflow="*",
             subscribed_to_event_type="*",
             tags=["urgent", "critical"],
-            tags_all=["production"]
+            tags_all=["production"],
         )
-        
+
         # Should match if has ANY tag AND ALL required tags
         assert sub.matches_event("any-wf", "any-event", {"urgent", "production"}, set())
-        assert sub.matches_event("any-wf", "any-event", {"critical", "production"}, set())
-        
+        assert sub.matches_event(
+            "any-wf", "any-event", {"critical", "production"}, set()
+        )
+
         # Should not match if missing required tag
         assert not sub.matches_event("any-wf", "any-event", {"urgent"}, set())
-        
+
         # Should not match if has required tag but no matching tags
         assert not sub.matches_event("any-wf", "any-event", {"production"}, set())
 
 
 class TestSubscriptionCache(TestWorkflowsRunner):
     """Tests for subscription cache functionality."""
-    
+
     @pytest.mark.asyncio
     async def test_load_subscription_cache(
-        self, 
-        mock_repo, 
-        mock_readers, 
-        mock_workflow_type, 
-        mock_session_maker, 
+        self,
+        mock_repo,
+        mock_readers,
+        mock_workflow_type,
+        mock_session_maker,
         mock_db_sub_type,
         mock_side_effects,
         test_session,
-        clean_tables
+        clean_tables,
     ):
         """Test loading subscriptions into cache on startup."""
         from fleuve.model import Sub
-        
+
         # Insert some test subscriptions into database
         async with mock_session_maker() as s:
             from sqlalchemy import insert
-            
+
             await s.execute(
-                insert(mock_db_sub_type).values([
-                    {
-                        "workflow_id": "wf-1",
-                        "workflow_type": "test_workflow",
-                        "subscribed_to_workflow": "payment-wf",
-                        "subscribed_to_event_type": "payment.completed",
-                        "tags": ["urgent"],
-                        "tags_all": []
-                    },
-                    {
-                        "workflow_id": "wf-2",
-                        "workflow_type": "test_workflow",
-                        "subscribed_to_workflow": "*",
-                        "subscribed_to_event_type": "order.*",
-                        "tags": [],
-                        "tags_all": ["production"]
-                    }
-                ])
+                insert(mock_db_sub_type).values(
+                    [
+                        {
+                            "workflow_id": "wf-1",
+                            "workflow_type": "test_workflow",
+                            "subscribed_to_workflow": "payment-wf",
+                            "subscribed_to_event_type": "payment.completed",
+                            "tags": ["urgent"],
+                            "tags_all": [],
+                        },
+                        {
+                            "workflow_id": "wf-2",
+                            "workflow_type": "test_workflow",
+                            "subscribed_to_workflow": "*",
+                            "subscribed_to_event_type": "order.*",
+                            "tags": [],
+                            "tags_all": ["production"],
+                        },
+                    ]
+                )
             )
             await s.commit()
-        
+
         # Create runner
         runner = WorkflowsRunner(
             repo=mock_repo,
@@ -560,23 +578,23 @@ class TestSubscriptionCache(TestWorkflowsRunner):
             db_sub_type=mock_db_sub_type,
             se=mock_side_effects,
         )
-        
+
         # Load cache
         await runner._load_subscription_cache()
-        
+
         # Verify cache was loaded
         assert runner._cache_initialized
         assert "wf-1" in runner._subscription_cache
         assert "wf-2" in runner._subscription_cache
         assert len(runner._subscription_cache["wf-1"]) == 1
         assert len(runner._subscription_cache["wf-2"]) == 1
-        
+
         # Verify cache contents
         wf1_sub = runner._subscription_cache["wf-1"][0]
         assert wf1_sub.subscribed_to_workflow == "payment-wf"
         assert wf1_sub.subscribed_to_event_type == "payment.completed"
         assert wf1_sub.tags == ["urgent"]
-    
+
     @pytest.mark.asyncio
     async def test_update_subscription_cache(
         self,
@@ -585,11 +603,11 @@ class TestSubscriptionCache(TestWorkflowsRunner):
         mock_workflow_type,
         mock_session_maker,
         mock_db_sub_type,
-        mock_side_effects
+        mock_side_effects,
     ):
         """Test updating subscription cache."""
         from fleuve.model import Sub
-        
+
         # Create runner with initialized cache
         runner = WorkflowsRunner(
             repo=mock_repo,
@@ -600,33 +618,30 @@ class TestSubscriptionCache(TestWorkflowsRunner):
             se=mock_side_effects,
         )
         runner._cache_initialized = True
-        
+
         # Update cache with new subscriptions
         subs = [
             Sub(
                 workflow_id="payment-wf",
                 event_type="payment.completed",
                 tags=["urgent"],
-                tags_all=[]
+                tags_all=[],
             ),
             Sub(
-                workflow_id="*",
-                event_type="order.*",
-                tags=[],
-                tags_all=["production"]
-            )
+                workflow_id="*", event_type="order.*", tags=[], tags_all=["production"]
+            ),
         ]
-        
+
         await runner._update_subscription_cache("wf-1", subs)
-        
+
         # Verify cache was updated
         assert "wf-1" in runner._subscription_cache
         assert len(runner._subscription_cache["wf-1"]) == 2
-        
+
         # Update with empty subscriptions (should remove from cache)
         await runner._update_subscription_cache("wf-1", [])
         assert "wf-1" not in runner._subscription_cache
-    
+
     @pytest.mark.asyncio
     async def test_find_subscriptions_uses_cache(
         self,
@@ -635,16 +650,16 @@ class TestSubscriptionCache(TestWorkflowsRunner):
         mock_workflow_type,
         mock_session_maker,
         mock_db_sub_type,
-        mock_side_effects
+        mock_side_effects,
     ):
         """Test that find_subscriptions uses cache instead of database."""
         import datetime
         from pydantic import BaseModel
         from fleuve.runner import CachedSubscription
-        
+
         class TestEvent(BaseModel):
             type: str = "payment.completed"
-        
+
         # Create runner with cache
         runner = WorkflowsRunner(
             repo=mock_repo,
@@ -655,7 +670,7 @@ class TestSubscriptionCache(TestWorkflowsRunner):
             se=mock_side_effects,
         )
         runner._cache_initialized = True
-        
+
         # Populate cache
         runner._subscription_cache["wf-1"] = [
             CachedSubscription(
@@ -663,13 +678,13 @@ class TestSubscriptionCache(TestWorkflowsRunner):
                 subscribed_to_workflow="payment-wf",
                 subscribed_to_event_type="payment.completed",
                 tags=[],
-                tags_all=[]
+                tags_all=[],
             )
         ]
-        
+
         # Mock repo.get_workflow_tags to return empty list
         mock_repo.get_workflow_tags = AsyncMock(return_value=[])
-        
+
         # Create event
         event = ConsumedEvent(
             workflow_id="payment-wf",
@@ -678,14 +693,14 @@ class TestSubscriptionCache(TestWorkflowsRunner):
             global_id=1,
             at=datetime.datetime.now(),
             workflow_type="payment_workflow",
-            metadata_={}
+            metadata_={},
         )
-        
+
         # Find subscriptions
         workflows = await runner.find_subscriptions(event)
-        
+
         # Should find wf-1 from cache
         assert "wf-1" in workflows
-        
+
         # Verify database was not queried (no session maker calls)
         # Since we're using cache, session_maker shouldn't be called

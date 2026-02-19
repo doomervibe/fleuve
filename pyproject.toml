@@ -52,6 +52,9 @@ fleuve = "fleuve.cli:main"
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
+[project.optional-dependencies]
+otel = ["opentelemetry-api>=1.20.0"]
+
 [dependency-groups]
 dev = [
     "pytest (>=9.0.1,<10.0.0)",

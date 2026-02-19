@@ -56,24 +56,24 @@ class Sub(BaseModel):
 
     def matches_tags(self, event_tags: list[str], workflow_tags: list[str]) -> bool:
         """Check if subscription matches event/workflow tags.
-        
+
         Args:
             event_tags: Tags from the event's metadata
             workflow_tags: Tags from the workflow's metadata
-            
+
         Returns:
             True if the subscription's tag filters match, False otherwise
         """
         all_tags = set(event_tags) | set(workflow_tags)
-        
+
         # If tags specified, check ANY match (OR)
         if self.tags and not any(tag in all_tags for tag in self.tags):
             return False
-        
+
         # If tags_all specified, check ALL match (AND)
         if self.tags_all and not all(tag in all_tags for tag in self.tags_all):
             return False
-        
+
         return True
 
 
@@ -86,6 +86,7 @@ class ExternalSub(BaseModel):
 class StateBase(BaseModel):
     subscriptions: list[Sub]
     external_subscriptions: list["ExternalSub"] = []
+    lifecycle: Literal["active", "paused", "cancelled"] = "active"
 
 
 # Define type variables for generic typing
@@ -100,8 +101,10 @@ EE = TypeVar(
 class Rejection(BaseModel):
     msg: str = ""
 
+
 class AlreadyExists(Rejection):
     pass
+
 
 class EvDirectMessage(EventBase, ABC):
     target_workflow_id: str
@@ -133,11 +136,41 @@ class EvActionCancel(EventBase):
     event_numbers: list[int] | None = None
 
 
+class EvSystemPause(EventBase):
+    """System event emitted when a workflow is paused externally."""
+
+    type: Literal["system_pause"] = "system_pause"
+    reason: str = ""
+
+
+class EvSystemResume(EventBase):
+    """System event emitted when a workflow is resumed externally."""
+
+    type: Literal["system_resume"] = "system_resume"
+
+
+class EvSystemCancel(EventBase):
+    """System event emitted when a workflow is cancelled externally."""
+
+    type: Literal["system_cancel"] = "system_cancel"
+    reason: str = ""
+
+
 class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
     @classmethod
     @abstractmethod
     def name(cls) -> str:
         pass
+
+    @classmethod
+    def schema_version(cls) -> int:
+        """Schema version for event storage. Override when evolving event schemas."""
+        return 1
+
+    @classmethod
+    def upcast(cls, event_type: str, schema_version: int, raw_data: dict) -> dict:
+        """Transform old event data to current schema. Override to handle migrations."""
+        return raw_data
 
     @classmethod
     def decide_and_evolve(
@@ -152,10 +185,25 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
     @classmethod
     def evolve_(cls, state: S | None, events: list[E]) -> S:
         for e in events:
-            state = cls.evolve(state, e)
+            state = cls._evolve_system(state, e) or cls.evolve(state, e)
 
         assert state
         return state
+
+    @classmethod
+    def _evolve_system(cls, state: S | None, event: E) -> S | None:
+        """Handle system lifecycle events. Returns new state or None if not a system event."""
+        if isinstance(event, EvSystemPause):
+            new_lifecycle: Literal["active", "paused", "cancelled"] = "paused"
+        elif isinstance(event, EvSystemResume):
+            new_lifecycle = "active"
+        elif isinstance(event, EvSystemCancel):
+            new_lifecycle = "cancelled"
+        else:
+            return None
+        if state is None:
+            return StateBase(subscriptions=[], external_subscriptions=[], lifecycle=new_lifecycle)  # type: ignore[return-value]
+        return state.model_copy(update={"lifecycle": new_lifecycle})
 
     @staticmethod
     @abstractmethod
@@ -176,8 +224,6 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
     @abstractmethod
     def is_final_event(e: E) -> bool:
         pass
-
-
 
 
 class ActionContext(BaseModel):
@@ -219,7 +265,9 @@ class ActionTimeout(BaseModel):
             yield AnotherCommand(...)
     """
 
-    seconds: float = Field(..., gt=0, description="Timeout in seconds for the remainder of the action.")
+    seconds: float = Field(
+        ..., gt=0, description="Timeout in seconds for the remainder of the action."
+    )
 
 
 Wf = TypeVar("Wf", bound=Workflow)

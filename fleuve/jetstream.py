@@ -7,6 +7,7 @@ This module implements the Outbox pattern for reliable event delivery:
 
 This eliminates dual-write inconsistency while maintaining strong consistency.
 """
+
 import asyncio
 import json
 import logging
@@ -26,14 +27,14 @@ logger = logging.getLogger(__name__)
 
 class JetStreamPublisher:
     """Publishes events from PostgreSQL to NATS JetStream using Outbox pattern.
-    
+
     This component continuously polls PostgreSQL for unpublished events
     (pushed=False) and publishes them to NATS JetStream. This ensures:
     - No dual-write inconsistency
     - At-least-once delivery
     - Automatic recovery from failures
     - Strict ordering (requires distributed lock)
-    
+
     IMPORTANT: Only ONE instance should run per workflow_type to maintain
     event ordering. Uses PostgreSQL advisory locks to ensure exclusivity.
     """
@@ -50,7 +51,7 @@ class JetStreamPublisher:
         enable_lock: bool = True,
     ):
         """Initialize JetStream publisher.
-        
+
         Args:
             nats_client: Connected NATS client
             session_maker: SQLAlchemy session maker
@@ -104,27 +105,25 @@ class JetStreamPublisher:
 
     async def _acquire_lock(self):
         """Acquire PostgreSQL advisory lock to ensure single publisher.
-        
+
         Uses pg_try_advisory_lock() which:
         - Returns immediately (non-blocking)
         - Automatically released on connection close
         - Scoped to the session, not transaction
-        
+
         Raises:
             RuntimeError: If lock cannot be acquired (another publisher is running)
         """
         async with self._session_maker() as s:
-            result = await s.execute(
-                select(func.pg_try_advisory_lock(self._lock_id))
-            )
+            result = await s.execute(select(func.pg_try_advisory_lock(self._lock_id)))
             acquired = result.scalar()
-            
+
             if not acquired:
                 raise RuntimeError(
                     f"Could not acquire lock for OutboxPublisher (workflow_type={self._workflow_type}). "
                     f"Another instance is already running. Lock ID: {self._lock_id}"
                 )
-            
+
             self._lock_acquired = True
             logger.info(
                 f"Acquired OutboxPublisher lock for {self._workflow_type} (lock_id={self._lock_id})"
@@ -135,9 +134,7 @@ class JetStreamPublisher:
         if self._lock_acquired:
             try:
                 async with self._session_maker() as s:
-                    await s.execute(
-                        select(func.pg_advisory_unlock(self._lock_id))
-                    )
+                    await s.execute(select(func.pg_advisory_unlock(self._lock_id)))
                     logger.info(
                         f"Released OutboxPublisher lock for {self._workflow_type}"
                     )
@@ -252,7 +249,7 @@ class JetStreamPublisher:
 
 class JetStreamConsumer:
     """Consumes events from NATS JetStream.
-    
+
     Provides durable consumption with explicit acknowledgment and
     automatic retries for failed messages.
     """
@@ -266,7 +263,7 @@ class JetStreamConsumer:
         event_model_type: Type[BaseModel],
     ):
         """Initialize JetStream consumer.
-        
+
         Args:
             nats_client: Connected NATS client
             stream_name: Name of JetStream stream to consume from
@@ -322,7 +319,7 @@ class JetStreamConsumer:
 
         Yields:
             Tuple of (ConsumedEvent, ack_callback)
-            
+
         Args:
             batch_size: Number of messages to fetch
             timeout: Timeout in seconds for fetch operation
@@ -346,10 +343,10 @@ class JetStreamConsumer:
 
     def _parse_message(self, msg):
         """Parse NATS message into ConsumedEvent.
-        
+
         Args:
             msg: NATS message object
-            
+
         Returns:
             ConsumedEvent instance
         """
@@ -369,7 +366,11 @@ class JetStreamConsumer:
             event_no=int(headers.get("workflow_version")),
             event=event,
             global_id=int(headers.get("global_id")),
-            at=datetime.fromisoformat(data.get("at")) if "at" in data else datetime.now(),
+            at=(
+                datetime.fromisoformat(data.get("at"))
+                if "at" in data
+                else datetime.now()
+            ),
             workflow_type=headers.get("workflow_type", self._workflow_type),
             metadata_=metadata_,
         )

@@ -170,6 +170,7 @@ class DelayScheduler(Generic[C, Se, Ds]):
                     "event_type": delay_complete_event.type,
                     "workflow_type": self._workflow_type,
                     "body": delay_complete_event,
+                    "schema_version": 1,
                 }
             )
         )

@@ -119,9 +119,7 @@ async def migrate_offsets_on_scale_up(
     async with session_maker() as s:
         # Check which new readers already have offsets
         result = await s.execute(
-            select(offset_model.reader).where(
-                offset_model.reader.in_(new_reader_names)
-            )
+            select(offset_model.reader).where(offset_model.reader.in_(new_reader_names))
         )
         existing_new_readers = {row.reader for row in result.fetchall()}
 
@@ -208,7 +206,10 @@ async def merge_offsets_on_scale_down(
                         # Insert if doesn't exist
                         await s.execute(
                             insert(offset_model).values(
-                                {"reader": target_reader_name, "last_read_event_no": max_offset}
+                                {
+                                    "reader": target_reader_name,
+                                    "last_read_event_no": max_offset,
+                                }
                             )
                         )
                     await s.commit()
@@ -334,7 +335,9 @@ async def update_scaling_operation_status(
         )
         await s.commit()
         if result.rowcount > 0:
-            logger.info(f"Updated scaling operation status for {workflow_type} to {status}")
+            logger.info(
+                f"Updated scaling operation status for {workflow_type} to {status}"
+            )
 
 
 async def check_all_workers_at_offset(
@@ -360,8 +363,9 @@ async def check_all_workers_at_offset(
 
     async with session_maker() as s:
         result = await s.execute(
-            select(offset_model.reader, offset_model.last_read_event_no)
-            .where(offset_model.reader.in_(reader_names))
+            select(offset_model.reader, offset_model.last_read_event_no).where(
+                offset_model.reader.in_(reader_names)
+            )
         )
         rows = result.fetchall()
 
@@ -557,9 +561,7 @@ async def initialize_partition_offsets(
                     .values({"last_read_event_no": target_offset})
                 )
                 await s.commit()
-                logger.info(
-                    f"Updated {reader_name} offset to {target_offset}"
-                )
+                logger.info(f"Updated {reader_name} offset to {target_offset}")
 
 
 async def scale_up_partitions(
@@ -650,7 +652,9 @@ async def scale_up_partitions(
         )
 
         # Clear scaling operation
-        await clear_scaling_operation(session_maker, scaling_operation_model, workflow_type)
+        await clear_scaling_operation(
+            session_maker, scaling_operation_model, workflow_type
+        )
 
         logger.info(
             f"Scaling up completed. All workers synchronized to offset {target_offset}. "
@@ -734,7 +738,9 @@ async def scale_down_partitions(
         )
 
         # Wait for all workers to reach target_offset
-        all_reader_names = old_reader_names  # Wait for all workers (including those to be removed)
+        all_reader_names = (
+            old_reader_names  # Wait for all workers (including those to be removed)
+        )
         reached = await wait_for_workers_to_reach_offset(
             session_maker, offset_model, all_reader_names, target_offset, timeout
         )
@@ -758,7 +764,9 @@ async def scale_down_partitions(
         )
 
         # Clear scaling operation
-        await clear_scaling_operation(session_maker, scaling_operation_model, workflow_type)
+        await clear_scaling_operation(
+            session_maker, scaling_operation_model, workflow_type
+        )
 
         logger.info(
             f"Scaling down completed. All workers synchronized to offset {target_offset}. "

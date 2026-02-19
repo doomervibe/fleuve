@@ -1,11 +1,14 @@
 """
 Unit tests for les.actions module.
 """
+
 import asyncio
 import datetime
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from nats.aio.client import Client as NATS
 
 from fleuve.actions import ActionExecutor, ActionStatus
 from fleuve.model import ActionContext, Adapter, RetryPolicy
@@ -35,9 +38,31 @@ class TestActionExecutor:
     """Tests for ActionExecutor class using real database."""
 
     @pytest.fixture
+    async def ephemeral_storage(self, nats_client: NATS):
+        """Create a real ephemeral storage with NATS."""
+        from fleuve.repo import EuphStorageNATS
+        from fleuve.tests.conftest import TestState
+
+        bucket_name = f"test_states_{uuid.uuid4().hex[:8]}"
+        storage = EuphStorageNATS(
+            c=nats_client,
+            bucket=bucket_name,
+            s=TestState,
+        )
+        await storage.__aenter__()
+        yield storage
+        await storage.__aexit__(None, None, None)
+        try:
+            js = nats_client.jetstream()
+            await js.delete_key_value(bucket_name)
+        except Exception:
+            pass
+
+    @pytest.fixture
     def mock_repo(self):
         """Create a mock AsyncRepo for testing."""
         from unittest.mock import AsyncMock
+
         repo = AsyncMock()
         repo.process_command = AsyncMock(return_value=None)
         return repo
@@ -75,14 +100,16 @@ class TestActionExecutor:
             type: str = "test"
 
         event = TestEvent()
-        assert action_executor.to_be_act_on(ConsumedEvent(
-            workflow_id="wf-1",
-            event_no=1,
-            event=event,
-            global_id=1,
-            at=datetime.datetime.now(datetime.timezone.utc),
-            workflow_type="test_workflow",
-        ))
+        assert action_executor.to_be_act_on(
+            ConsumedEvent(
+                workflow_id="wf-1",
+                event_no=1,
+                event=event,
+                global_id=1,
+                at=datetime.datetime.now(datetime.timezone.utc),
+                workflow_type="test_workflow",
+            )
+        )
 
     @pytest.mark.asyncio
     async def test_start_stop(self, action_executor):
@@ -125,8 +152,8 @@ class TestActionExecutor:
         )
 
         # Mark as running
-        action_executor._running_actions[(event.agg_id, event.event_no)] = asyncio.create_task(
-            asyncio.sleep(1)
+        action_executor._running_actions[(event.agg_id, event.event_no)] = (
+            asyncio.create_task(asyncio.sleep(1))
         )
 
         await action_executor.execute_action(event)
@@ -167,7 +194,10 @@ class TestActionExecutor:
         await action_executor.execute_action(event)
 
         # Should not add to running actions
-        assert (event.workflow_id, event.event_no) not in action_executor._running_actions
+        assert (
+            event.workflow_id,
+            event.event_no,
+        ) not in action_executor._running_actions
 
     @pytest.mark.asyncio
     async def test_execute_action_success(
@@ -207,9 +237,10 @@ class TestActionExecutor:
 
         # Verify adapter was called
         assert len(adapter.called_events) > 0
-        
+
         # Verify activity was created in database
         from sqlalchemy import select
+
         async with test_session_maker() as s:
             activity = await s.scalar(
                 select(test_activity_model)
@@ -229,7 +260,7 @@ class TestActionExecutor:
         mock_repo,
     ):
         """Test that command is processed before action is marked as completed.
-        
+
         If command processing fails, the action should NOT be marked as completed,
         ensuring that on recovery, the command will be processed again.
         """
@@ -268,6 +299,7 @@ class TestActionExecutor:
 
         # Verify activity was NOT marked as completed (so on recovery the command will be processed again)
         from sqlalchemy import select
+
         async with test_session_maker() as s:
             activity = await s.scalar(
                 select(test_activity_model)
@@ -320,6 +352,7 @@ class TestActionExecutor:
 
         # Verify timeout occurred - activity should be in failed/retrying status after timeout
         from sqlalchemy import select
+
         async with test_session_maker() as s:
             activity = await s.scalar(
                 select(test_activity_model)
@@ -368,6 +401,7 @@ class TestActionExecutor:
         await executor.execute_action(event)
 
         from sqlalchemy import select
+
         async with test_session_maker() as s:
             activity = await s.scalar(
                 select(test_activity_model)
@@ -419,6 +453,7 @@ class TestActionExecutor:
         await executor.execute_action(event)
 
         from sqlalchemy import select
+
         async with test_session_maker() as s:
             activity = await s.scalar(
                 select(test_activity_model)
@@ -471,10 +506,15 @@ class TestActionExecutor:
         await executor.execute_action(event)
 
         assert mock_repo.process_command.call_count == 2
-        mock_repo.process_command.assert_any_call("wf-1", TestCommand(action="before", value=1))
-        mock_repo.process_command.assert_any_call("wf-1", TestCommand(action="after", value=2))
+        mock_repo.process_command.assert_any_call(
+            "wf-1", TestCommand(action="before", value=1)
+        )
+        mock_repo.process_command.assert_any_call(
+            "wf-1", TestCommand(action="after", value=2)
+        )
 
         from sqlalchemy import select
+
         async with test_session_maker() as s:
             activity = await s.scalar(
                 select(test_activity_model)
@@ -527,6 +567,7 @@ class TestActionExecutor:
         await asyncio.wait_for(executor.execute_action(event), timeout=15.0)
 
         from sqlalchemy import select
+
         async with test_session_maker() as s:
             activity = await s.scalar(
                 select(test_activity_model)
@@ -621,6 +662,7 @@ class TestActionExecutor:
         await executor.execute_action(event)
 
         from sqlalchemy import select
+
         async with test_session_maker() as s:
             activity = await s.scalar(
                 select(test_activity_model)
@@ -793,3 +835,117 @@ class TestActionExecutor:
             )
             assert act1.status == ActionStatus.CANCELLED.value
             assert act2.status == ActionStatus.PENDING.value
+
+    @pytest.mark.asyncio
+    async def test_retry_failed_action(
+        self,
+        test_session_maker,
+        ephemeral_storage,
+        test_event_model,
+        test_subscription_model,
+        test_activity_model,
+        clean_tables,
+    ):
+        """Test that retry_failed_action resets FAILED activity and re-executes."""
+        from fleuve.tests.conftest import TestCommand, TestWorkflow
+        from fleuve.repo import AsyncRepo
+
+        adapter = MockAdapter(
+            should_fail=False, return_cmd=TestCommand(action="update", value=5)
+        )
+        repo = AsyncRepo(
+            session_maker=test_session_maker,
+            es=ephemeral_storage,
+            model=TestWorkflow,
+            db_event_model=test_event_model,
+            db_sub_model=test_subscription_model,
+        )
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=adapter,
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=repo,
+            max_retries=0,
+        )
+
+        await repo.create_new(TestCommand(action="create", value=10), "wf-retry")
+        await repo.process_command("wf-retry", TestCommand(action="update", value=5))
+
+        failing_adapter = MockAdapter(should_fail=True)
+        failing_executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=failing_adapter,
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=repo,
+            max_retries=0,
+        )
+
+        from fleuve.stream import ConsumedEvent
+        from fleuve.tests.conftest import TestEvent
+
+        event = ConsumedEvent(
+            workflow_id="wf-retry",
+            event_no=2,
+            event=TestEvent(value=5),
+            global_id=2,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+        )
+        await failing_executor.execute_action(event)
+
+        async with test_session_maker() as s:
+            from sqlalchemy import select
+
+            act = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-retry")
+                .where(test_activity_model.event_number == 2)
+            )
+            assert act.status == ActionStatus.FAILED.value
+
+        ok = await executor.retry_failed_action("wf-retry", 2)
+        assert ok is True
+
+        await asyncio.sleep(0.5)
+
+        async with test_session_maker() as s:
+            act = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-retry")
+                .where(test_activity_model.event_number == 2)
+            )
+            assert act.status == ActionStatus.COMPLETED.value
+
+    @pytest.mark.asyncio
+    async def test_retry_failed_action_not_found(
+        self,
+        test_session_maker,
+        ephemeral_storage,
+        test_event_model,
+        test_subscription_model,
+        test_activity_model,
+        clean_tables,
+    ):
+        """Test retry_failed_action returns False when activity is not FAILED."""
+        from fleuve.tests.conftest import TestWorkflow
+        from fleuve.repo import AsyncRepo
+
+        repo = AsyncRepo(
+            session_maker=test_session_maker,
+            es=ephemeral_storage,
+            model=TestWorkflow,
+            db_event_model=test_event_model,
+            db_sub_model=test_subscription_model,
+        )
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=MockAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=repo,
+        )
+
+        ok = await executor.retry_failed_action("nonexistent", 1)
+        assert ok is False

@@ -7,6 +7,7 @@ including metrics for:
 - Event consumption and lag
 - System health and errors
 """
+
 from typing import Any
 
 try:
@@ -15,6 +16,7 @@ try:
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
+
     # Stub implementations if prometheus_client is not installed
     class Counter:
         def __init__(self, *args, **kwargs):
@@ -55,26 +57,26 @@ except ImportError:
 
 class FleuveMetrics:
     """Metrics collector for Fleuve workflows and JetStream integration.
-    
+
     Provides Prometheus-compatible metrics for monitoring workflow execution,
     event processing, and JetStream outbox patterns.
-    
+
     Usage:
         metrics = FleuveMetrics(workflow_type="order", enable_metrics=True)
-        
+
         # Record event processing
         metrics.events_processed.labels(workflow_type="order").inc()
-        
+
         # Record outbox publish
         metrics.outbox_events_published.labels(workflow_type="order").inc()
-        
+
         # Update queue depth
         metrics.outbox_queue_depth.labels(workflow_type="order").set(100)
     """
 
     def __init__(self, workflow_type: str, enable_metrics: bool = True):
         """Initialize metrics for a workflow type.
-        
+
         Args:
             workflow_type: Name of the workflow type
             enable_metrics: Whether to enable Prometheus metrics (default: True)
@@ -101,6 +103,12 @@ class FleuveMetrics:
         self.workflow_errors = Counter(
             "fleuve_workflow_errors_total",
             "Total number of workflow errors",
+            ["workflow_type", "error_type"],
+        )
+
+        self.failed_actions_total = Counter(
+            "fleuve_failed_actions_total",
+            "Total number of actions that permanently failed after all retries",
             ["workflow_type", "error_type"],
         )
 
@@ -187,7 +195,7 @@ class FleuveMetrics:
 
     def record_command_processed(self, status: str = "success"):
         """Record that a command was processed.
-        
+
         Args:
             status: Command status (success, rejected, error)
         """
@@ -198,7 +206,7 @@ class FleuveMetrics:
 
     def record_workflow_error(self, error_type: str):
         """Record a workflow error.
-        
+
         Args:
             error_type: Type of error (e.g., 'decide', 'evolve', 'subscription')
         """
@@ -207,9 +215,20 @@ class FleuveMetrics:
                 workflow_type=self.workflow_type, error_type=error_type
             ).inc()
 
+    def record_failed_action(self, error_type: str):
+        """Record that an action permanently failed after all retries.
+
+        Args:
+            error_type: Exception class name (e.g., 'ValueError', 'ConnectionError')
+        """
+        if self.enabled:
+            self.failed_actions_total.labels(
+                workflow_type=self.workflow_type, error_type=error_type
+            ).inc()
+
     def record_outbox_published(self, count: int = 1):
         """Record events published from outbox to JetStream.
-        
+
         Args:
             count: Number of events published
         """
@@ -220,7 +239,7 @@ class FleuveMetrics:
 
     def record_outbox_failure(self, error_type: str):
         """Record an outbox publish failure.
-        
+
         Args:
             error_type: Type of error (e.g., 'connection', 'timeout', 'validation')
         """
@@ -231,7 +250,7 @@ class FleuveMetrics:
 
     def set_outbox_queue_depth(self, depth: int):
         """Update the outbox queue depth gauge.
-        
+
         Args:
             depth: Current number of unpublished events
         """
@@ -240,18 +259,18 @@ class FleuveMetrics:
 
     def observe_outbox_latency(self, latency_seconds: float):
         """Record outbox publish latency.
-        
+
         Args:
             latency_seconds: Time taken to publish an event in seconds
         """
         if self.enabled:
-            self.outbox_publish_latency.labels(workflow_type=self.workflow_type).observe(
-                latency_seconds
-            )
+            self.outbox_publish_latency.labels(
+                workflow_type=self.workflow_type
+            ).observe(latency_seconds)
 
     def observe_outbox_batch_size(self, batch_size: int):
         """Record outbox batch size.
-        
+
         Args:
             batch_size: Number of events in the batch
         """
@@ -262,7 +281,7 @@ class FleuveMetrics:
 
     def set_consumer_lag(self, consumer_name: str, lag: int):
         """Update JetStream consumer lag.
-        
+
         Args:
             consumer_name: Name of the consumer
             lag: Number of events behind
@@ -274,7 +293,7 @@ class FleuveMetrics:
 
     def record_jetstream_consumed(self, consumer_name: str, count: int = 1):
         """Record messages consumed from JetStream.
-        
+
         Args:
             consumer_name: Name of the consumer
             count: Number of messages consumed
@@ -286,7 +305,7 @@ class FleuveMetrics:
 
     def record_jetstream_error(self, consumer_name: str, error_type: str):
         """Record a JetStream consumer error.
-        
+
         Args:
             consumer_name: Name of the consumer
             error_type: Type of error
@@ -300,14 +319,14 @@ class FleuveMetrics:
 
     def set_stuck_events(self, count: int):
         """Update stuck events gauge.
-        
+
         Args:
             count: Number of stuck unpublished events
         """
         if self.enabled:
-            self.reconciliation_stuck_events.labels(workflow_type=self.workflow_type).set(
-                count
-            )
+            self.reconciliation_stuck_events.labels(
+                workflow_type=self.workflow_type
+            ).set(count)
 
     def record_reconciliation_check(self):
         """Record a reconciliation check."""
@@ -316,7 +335,7 @@ class FleuveMetrics:
 
     def record_reader_fallback(self, reader_name: str):
         """Record that a reader activated PostgreSQL fallback.
-        
+
         Args:
             reader_name: Name of the reader
         """
@@ -327,7 +346,7 @@ class FleuveMetrics:
 
     def record_reader_event(self, reader_name: str, source: str, count: int = 1):
         """Record events read by a reader.
-        
+
         Args:
             reader_name: Name of the reader
             source: Source of events ('jetstream' or 'postgres')

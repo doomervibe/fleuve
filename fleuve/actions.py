@@ -2,16 +2,24 @@ import asyncio
 import datetime
 import logging
 from enum import Enum
+from collections.abc import Awaitable
 from typing import Any, Callable, Generic, Type, TypeVar
 
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from fleuve.model import ActionContext, ActionTimeout, Adapter, CheckpointYield, RetryPolicy
+from fleuve.model import (
+    ActionContext,
+    ActionTimeout,
+    Adapter,
+    CheckpointYield,
+    RetryPolicy,
+)
 from fleuve.postgres import Activity, StoredEvent
 from fleuve.repo import AsyncRepo
 from fleuve.stream import ConsumedEvent
+from fleuve.tracing import _NoopTracer
 
 logger = logging.getLogger(__name__)
 
@@ -42,15 +50,23 @@ class ActionExecutor(Generic[C, Ae]):
         max_retries: int = 3,
         recovery_interval: datetime.timedelta = datetime.timedelta(seconds=30),
         action_timeout: datetime.timedelta | None = None,
+        on_action_failed: (
+            Callable[[str, int, Exception], Awaitable[None]] | None
+        ) = None,
+        metrics: Any = None,
+        tracer: Any = None,
     ) -> None:
         self._session_maker = session_maker
         self._adapter = adapter
+        self._metrics = metrics
         self._db_activity_model = db_activity_model
         self._db_event_model = db_event_model
         self._repo = repo
         self._max_retries = max_retries
         self._recovery_interval = recovery_interval
         self._action_timeout = action_timeout
+        self._on_action_failed = on_action_failed
+        self._tracer = tracer or _NoopTracer()
         self._running_actions: dict[tuple[str, int], asyncio.Task] = {}
         self._recovery_task: asyncio.Task | None = None
         self._running = False
@@ -161,14 +177,79 @@ class ActionExecutor(Generic[C, Ae]):
                 )
             )
             if event_numbers:
-                q = q.where(
-                    self._db_activity_model.event_number.in_(event_numbers)
-                )
+                q = q.where(self._db_activity_model.event_number.in_(event_numbers))
             await s.execute(q.values(status=ActionStatus.CANCELLED.value))
             await s.commit()
 
+    async def retry_failed_action(self, workflow_id: str, event_number: int) -> bool:
+        """Reset a FAILED activity to PENDING and re-execute it.
+
+        Returns True if the action was found and re-queued, False otherwise.
+        """
+        async with self._session_maker() as s:
+            activity = await self._get_activity(s, workflow_id, event_number)
+            if activity is None or activity.status != ActionStatus.FAILED.value:
+                return False
+
+            await s.execute(
+                update(self._db_activity_model)
+                .where(self._db_activity_model.workflow_id == workflow_id)
+                .where(self._db_activity_model.event_number == event_number)
+                .values(
+                    status=ActionStatus.PENDING.value,
+                    finished_at=None,
+                    retry_count=0,
+                    error_type=None,
+                    error_message=None,
+                )
+            )
+            await s.commit()
+
+        async with self._session_maker() as s:
+            result = await s.execute(
+                select(self._db_event_model)
+                .where(self._db_event_model.workflow_id == workflow_id)
+                .where(self._db_event_model.workflow_version == event_number)
+                .limit(1)
+            )
+            event_row = result.scalar_one_or_none()
+
+        if event_row is None:
+            logger.warning(
+                f"Cannot retry {workflow_id}:{event_number}: event not found"
+            )
+            return False
+
+        event = ConsumedEvent(
+            workflow_id=workflow_id,
+            event_no=event_number,
+            event=event_row.body,
+            global_id=event_row.global_id,
+            at=event_row.at,
+            workflow_type=getattr(
+                event_row, "workflow_type", self._repo._workflow_type
+            ),
+            metadata_=getattr(event_row, "metadata_", None) or {},
+        )
+        await self.execute_action(event)
+        return True
+
     async def _run_action_with_retry(self, event: ConsumedEvent) -> None:
         """Run action with retry logic and checkpoint support."""
+        workflow_id = event.agg_id
+        event_number = event.event_no
+
+        with self._tracer.span(
+            "execute_action",
+            {
+                "fleuve.workflow_id": workflow_id,
+                "fleuve.event_number": event_number,
+            },
+        ):
+            await self._run_action_with_retry_impl(event)
+
+    async def _run_action_with_retry_impl(self, event: ConsumedEvent) -> None:
+        """Internal implementation of action execution with retry."""
         workflow_id = event.agg_id
         event_number = event.event_no
 
@@ -328,6 +409,13 @@ class ActionExecutor(Generic[C, Ae]):
             f"Action failed permanently for {workflow_id}:{event_number} "
             f"after {activity.retry_policy.max_retries + 1} attempts"
         )
+        if self._on_action_failed and last_exception is not None:
+            try:
+                await self._on_action_failed(workflow_id, event_number, last_exception)
+            except Exception as e:
+                logger.exception(
+                    f"on_action_failed callback failed for {workflow_id}:{event_number}: {e}"
+                )
 
     async def _process_action_item(
         self,
@@ -543,7 +631,11 @@ class ActionExecutor(Generic[C, Ae]):
         await s.commit()
 
     async def _update_activity_retry_policy(
-        self, s: AsyncSession, workflow_id: str, event_number: int, retry_policy: RetryPolicy
+        self,
+        s: AsyncSession,
+        workflow_id: str,
+        event_number: int,
+        retry_policy: RetryPolicy,
     ):
         """Update the retry policy for an activity."""
         await s.execute(
@@ -558,6 +650,7 @@ class ActionExecutor(Generic[C, Ae]):
         self, s: AsyncSession, workflow_id: str, event_number: int, exception: Exception
     ):
         """Mark an action as permanently failed."""
+        error_type = type(exception).__name__
         await s.execute(
             update(self._db_activity_model)
             .where(self._db_activity_model.workflow_id == workflow_id)
@@ -565,8 +658,10 @@ class ActionExecutor(Generic[C, Ae]):
             .values(
                 status=ActionStatus.FAILED.value,
                 finished_at=datetime.datetime.now(datetime.timezone.utc),
-                error_type=type(exception).__name__,
+                error_type=error_type,
                 error_message=str(exception),
             )
         )
         await s.commit()
+        if self._metrics is not None and hasattr(self._metrics, "record_failed_action"):
+            self._metrics.record_failed_action(error_type)

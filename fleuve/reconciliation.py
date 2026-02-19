@@ -5,6 +5,7 @@ stuck in the outbox (unpublished state). It does not automatically fix issues
 but provides visibility and monitoring to ensure the OutboxPublisher is
 working correctly.
 """
+
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -20,14 +21,14 @@ logger = logging.getLogger(__name__)
 
 class ReconciliationService:
     """Monitors PostgreSQL outbox for stuck unpublished events.
-    
+
     This service periodically checks for events that have been in the
     unpublished state (pushed=False) for longer than expected. This
     indicates either:
     1. High throughput where OutboxPublisher is catching up
     2. OutboxPublisher failure/crash
     3. NATS connectivity issues
-    
+
     The service logs warnings but does not automatically republish events.
     The OutboxPublisher handles automatic republishing when it restarts.
     """
@@ -41,7 +42,7 @@ class ReconciliationService:
         stuck_threshold: timedelta = timedelta(minutes=5),
     ):
         """Initialize reconciliation service.
-        
+
         Args:
             session_maker: SQLAlchemy session maker
             event_model: StoredEvent model class
@@ -89,7 +90,7 @@ class ReconciliationService:
 
     async def _check_stuck_events(self):
         """Check for events stuck in unpublished state.
-        
+
         Logs warnings if events are found that have been unpublished
         for longer than the stuck threshold.
         """

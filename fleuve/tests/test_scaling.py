@@ -1,6 +1,7 @@
 """
 Unit tests for les.scaling module.
 """
+
 import asyncio
 import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -52,7 +53,9 @@ class TestScalingFunctions:
         assert result == 100
 
     @pytest.mark.asyncio
-    async def test_get_max_offset_multiple_readers(self, test_session_maker, test_session):
+    async def test_get_max_offset_multiple_readers(
+        self, test_session_maker, test_session
+    ):
         """Test get_max_offset returns the maximum offset across multiple readers."""
         from fleuve.scaling import get_max_offset
 
@@ -73,7 +76,9 @@ class TestScalingFunctions:
         assert result == 150
 
     @pytest.mark.asyncio
-    async def test_get_max_offset_missing_readers(self, test_session_maker, test_session):
+    async def test_get_max_offset_missing_readers(
+        self, test_session_maker, test_session
+    ):
         """Test get_max_offset handles missing readers gracefully."""
         from fleuve.scaling import get_max_offset
 
@@ -115,7 +120,9 @@ class TestScalingFunctions:
             assert op.status == "pending"
 
     @pytest.mark.asyncio
-    async def test_create_scaling_operation_existing_pending(self, test_session_maker, test_session):
+    async def test_create_scaling_operation_existing_pending(
+        self, test_session_maker, test_session
+    ):
         """Test creating a scaling operation when one already exists raises ValueError."""
         from fleuve.scaling import create_scaling_operation
 
@@ -137,7 +144,9 @@ class TestScalingFunctions:
             )
 
     @pytest.mark.asyncio
-    async def test_create_scaling_operation_existing_completed(self, test_session_maker, test_session):
+    async def test_create_scaling_operation_existing_completed(
+        self, test_session_maker, test_session
+    ):
         """Test creating a scaling operation when a completed one exists requires clearing first."""
         from fleuve.scaling import clear_scaling_operation, create_scaling_operation
 
@@ -166,7 +175,9 @@ class TestScalingFunctions:
         )
 
     @pytest.mark.asyncio
-    async def test_check_all_workers_at_offset_all_at_target(self, test_session_maker, test_session):
+    async def test_check_all_workers_at_offset_all_at_target(
+        self, test_session_maker, test_session
+    ):
         """Test check_all_workers_at_offset when all workers are at or past target."""
         from fleuve.scaling import check_all_workers_at_offset
 
@@ -188,7 +199,9 @@ class TestScalingFunctions:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_check_all_workers_at_offset_some_behind(self, test_session_maker, test_session):
+    async def test_check_all_workers_at_offset_some_behind(
+        self, test_session_maker, test_session
+    ):
         """Test check_all_workers_at_offset when some workers are behind target."""
         from fleuve.scaling import check_all_workers_at_offset
 
@@ -210,7 +223,9 @@ class TestScalingFunctions:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_check_all_workers_at_offset_missing_readers(self, test_session_maker, test_session):
+    async def test_check_all_workers_at_offset_missing_readers(
+        self, test_session_maker, test_session
+    ):
         """Test check_all_workers_at_offset when some readers don't exist."""
         from fleuve.scaling import check_all_workers_at_offset
 
@@ -230,7 +245,9 @@ class TestScalingFunctions:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_update_scaling_operation_status(self, test_session_maker, test_session):
+    async def test_update_scaling_operation_status(
+        self, test_session_maker, test_session
+    ):
         """Test updating scaling operation status."""
         from fleuve.scaling import update_scaling_operation_status
 
@@ -292,7 +309,9 @@ class TestScalingFunctions:
             assert result.scalar_one_or_none() is None
 
     @pytest.mark.asyncio
-    async def test_initialize_partition_offsets_new_readers(self, test_session_maker, test_session):
+    async def test_initialize_partition_offsets_new_readers(
+        self, test_session_maker, test_session
+    ):
         """Test initializing offsets for new partitions."""
         from fleuve.scaling import initialize_partition_offsets
 
@@ -312,7 +331,9 @@ class TestScalingFunctions:
         # Verify new offsets were created
         async with test_session_maker() as s:
             result = await s.execute(
-                select(TestOffsetModel).where(TestOffsetModel.reader.in_(["reader2", "reader3"]))
+                select(TestOffsetModel).where(
+                    TestOffsetModel.reader.in_(["reader2", "reader3"])
+                )
             )
             offsets = result.scalars().all()
             assert len(offsets) == 2
@@ -320,7 +341,9 @@ class TestScalingFunctions:
                 assert offset.last_read_event_no == 100
 
     @pytest.mark.asyncio
-    async def test_initialize_partition_offsets_existing_lower(self, test_session_maker, test_session):
+    async def test_initialize_partition_offsets_existing_lower(
+        self, test_session_maker, test_session
+    ):
         """Test initializing offsets updates existing offsets if they're lower."""
         from fleuve.scaling import initialize_partition_offsets
 
@@ -346,7 +369,9 @@ class TestScalingFunctions:
             assert offset.last_read_event_no == 100
 
     @pytest.mark.asyncio
-    async def test_initialize_partition_offsets_existing_higher(self, test_session_maker, test_session):
+    async def test_initialize_partition_offsets_existing_higher(
+        self, test_session_maker, test_session
+    ):
         """Test initializing offsets doesn't lower existing offsets."""
         from fleuve.scaling import initialize_partition_offsets
 
@@ -372,7 +397,9 @@ class TestScalingFunctions:
             assert offset.last_read_event_no == 150  # Kept higher value
 
     @pytest.mark.asyncio
-    async def test_wait_for_workers_to_reach_offset_success(self, test_session_maker, test_session):
+    async def test_wait_for_workers_to_reach_offset_success(
+        self, test_session_maker, test_session
+    ):
         """Test wait_for_workers_to_reach_offset succeeds when all workers reach target."""
         from fleuve.scaling import wait_for_workers_to_reach_offset
 
@@ -394,7 +421,9 @@ class TestScalingFunctions:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_wait_for_workers_to_reach_offset_timeout(self, test_session_maker, test_session):
+    async def test_wait_for_workers_to_reach_offset_timeout(
+        self, test_session_maker, test_session
+    ):
         """Test wait_for_workers_to_reach_offset times out when workers don't reach target."""
         from fleuve.scaling import wait_for_workers_to_reach_offset
 
@@ -556,12 +585,21 @@ class TestRunnerScalingDetection:
 
     @pytest.mark.asyncio
     async def test_runner_detects_scaling_operation(
-        self, test_session_maker, test_session, mock_repo, mock_side_effects, test_workflow
+        self,
+        test_session_maker,
+        test_session,
+        mock_repo,
+        mock_side_effects,
+        test_workflow,
     ):
         """Test that Runner detects scaling operation and notifies Reader."""
         from fleuve.runner import WorkflowsRunner
         from fleuve.stream import Readers
-        from fleuve.tests.models import DbEventModel, TestOffsetModel, TestSubscriptionModel
+        from fleuve.tests.models import (
+            DbEventModel,
+            TestOffsetModel,
+            TestSubscriptionModel,
+        )
         from fleuve.postgres import StoredEvent, Subscription
 
         # Create a scaling operation
@@ -602,11 +640,17 @@ class TestRunnerScalingDetection:
         assert runner.stream._stop_at_offset == 100
 
     @pytest.mark.asyncio
-    async def test_runner_no_scaling_operation_model(self, test_session_maker, mock_repo, mock_side_effects, test_workflow):
+    async def test_runner_no_scaling_operation_model(
+        self, test_session_maker, mock_repo, mock_side_effects, test_workflow
+    ):
         """Test that Runner doesn't check for scaling when model is None."""
         from fleuve.runner import WorkflowsRunner
         from fleuve.stream import Readers
-        from fleuve.tests.models import DbEventModel, TestOffsetModel, TestSubscriptionModel
+        from fleuve.tests.models import (
+            DbEventModel,
+            TestOffsetModel,
+            TestSubscriptionModel,
+        )
 
         readers = Readers(
             pg_session_maker=test_session_maker,
@@ -630,12 +674,21 @@ class TestRunnerScalingDetection:
 
     @pytest.mark.asyncio
     async def test_runner_scaling_check_workflow_type_filter(
-        self, test_session_maker, test_session, mock_repo, mock_side_effects, test_workflow
+        self,
+        test_session_maker,
+        test_session,
+        mock_repo,
+        mock_side_effects,
+        test_workflow,
     ):
         """Test that Runner only checks scaling operations for its workflow type."""
         from fleuve.runner import WorkflowsRunner
         from fleuve.stream import Readers
-        from fleuve.tests.models import DbEventModel, TestOffsetModel, TestSubscriptionModel
+        from fleuve.tests.models import (
+            DbEventModel,
+            TestOffsetModel,
+            TestSubscriptionModel,
+        )
 
         # Create scaling operations for different workflow types
         op1 = TestScalingOperationModel(

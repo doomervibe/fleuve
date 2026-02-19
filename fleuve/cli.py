@@ -1,4 +1,5 @@
 """Command-line interface for Fleuve."""
+
 import argparse
 import os
 import re
@@ -46,7 +47,9 @@ def create_project(
     """
     if not validate_project_name(project_name):
         print(f"Error: '{project_name}' is not a valid project name.")
-        print("Project name must be a valid Python identifier (letters, digits, underscores, starting with letter/underscore).")
+        print(
+            "Project name must be a valid Python identifier (letters, digits, underscores, starting with letter/underscore)."
+        )
         sys.exit(1)
 
     # Determine target directory
@@ -76,7 +79,7 @@ def create_project(
 
     # Create project directory
     project_dir.mkdir(parents=True, exist_ok=True)
-    
+
     if not multi_workflow:
         # Single workflow: create package directory
         package_dir = project_dir / project_name
@@ -88,16 +91,16 @@ def create_project(
 
     # Template variables for project
     project_title = project_name.replace("_", " ").title()
-    
+
     if multi_workflow:
         # For multi-workflow, determine initial workflow name
         if not initial_workflow:
             initial_workflow = "example_workflow"
-        
+
         workflow_name = initial_workflow
         workflow_title = workflow_name.replace("_", " ").title()
         workflow_class_name = workflow_title.replace(" ", "")
-        
+
         template_vars = {
             "project_name": project_name,
             "project_title": project_title,
@@ -126,7 +129,7 @@ def create_project(
 
         # Get relative path from template directory
         rel_path = template_file.relative_to(template_dir)
-        
+
         # Skip __pycache__ and .pyc files
         if "__pycache__" in rel_path.parts or rel_path.suffix == ".pyc":
             continue
@@ -134,7 +137,10 @@ def create_project(
         # Determine target path
         if multi_workflow:
             # Multi-workflow structure
-            if rel_path.parts[0] == "workflows" and "{{workflow_name}}" in rel_path.parts:
+            if (
+                rel_path.parts[0] == "workflows"
+                and "{{workflow_name}}" in rel_path.parts
+            ):
                 # Replace workflow placeholder with actual workflow name
                 new_parts = [workflows_dir.name] + [
                     workflow_name if p == "{{workflow_name}}" else p
@@ -175,20 +181,23 @@ def create_project(
             for ui_file in ui_template_dir.rglob("*"):
                 if ui_file.is_dir():
                     continue
-                
+
                 # Skip cache and build files
-                if any(p in ui_file.parts for p in ["node_modules", "dist", "__pycache__", ".git"]):
+                if any(
+                    p in ui_file.parts
+                    for p in ["node_modules", "dist", "__pycache__", ".git"]
+                ):
                     continue
                 if ui_file.suffix in [".pyc", ".pyo"]:
                     continue
-                
+
                 # Get relative path from UI template directory
                 rel_path = ui_file.relative_to(ui_template_dir)
                 target_path = project_dir / rel_path
-                
+
                 # Create parent directories
                 target_path.parent.mkdir(parents=True, exist_ok=True)
-                
+
                 # Read and render template if text file
                 try:
                     content = ui_file.read_text(encoding="utf-8")
@@ -197,15 +206,17 @@ def create_project(
                 except (UnicodeDecodeError, ValueError):
                     # Binary file, just copy
                     shutil.copy2(ui_file, target_path)
-                
+
                 # Make scripts executable
                 if target_path.suffix == ".sh":
                     target_path.chmod(0o755)
-            
+
             print(f"✓ UI files added (FastAPI backend + React frontend)")
 
     if multi_workflow:
-        print(f"✓ Created multi-workflow Fleuve project '{project_name}' in {project_dir}")
+        print(
+            f"✓ Created multi-workflow Fleuve project '{project_name}' in {project_dir}"
+        )
         print(f"✓ Initial workflow '{workflow_name}' created")
         print(f"\nNext steps:")
         print(f"  1. cd {project_name}")
@@ -257,7 +268,14 @@ def startproject(args: argparse.Namespace) -> None:
                 break
             print("Invalid project name. Please use a valid Python identifier.")
 
-    create_project(project_name, target_dir, overwrite, multi_workflow, initial_workflow, include_ui)
+    create_project(
+        project_name,
+        target_dir,
+        overwrite,
+        multi_workflow,
+        initial_workflow,
+        include_ui,
+    )
 
 
 def add_workflow(
@@ -265,14 +283,16 @@ def add_workflow(
     project_dir: Optional[str] = None,
 ) -> None:
     """Add a new workflow to an existing multi-workflow project.
-    
+
     Args:
         workflow_name: Name of the workflow to add (must be valid Python identifier)
         project_dir: Project directory. Defaults to current directory.
     """
     if not validate_project_name(workflow_name):
         print(f"Error: '{workflow_name}' is not a valid workflow name.")
-        print("Workflow name must be a valid Python identifier (letters, digits, underscores, starting with letter/underscore).")
+        print(
+            "Workflow name must be a valid Python identifier (letters, digits, underscores, starting with letter/underscore)."
+        )
         sys.exit(1)
 
     # Determine project directory
@@ -284,9 +304,13 @@ def add_workflow(
     # Check if this is a multi-workflow project
     workflows_dir = proj_dir / "workflows"
     if not workflows_dir.exists():
-        print(f"Error: '{proj_dir}' does not appear to be a multi-workflow Fleuve project.")
+        print(
+            f"Error: '{proj_dir}' does not appear to be a multi-workflow Fleuve project."
+        )
         print("The 'workflows/' directory is missing.")
-        print("\nTo create a multi-workflow project, use: fleuve startproject myproject --multi")
+        print(
+            "\nTo create a multi-workflow project, use: fleuve startproject myproject --multi"
+        )
         sys.exit(1)
 
     # Check if workflow already exists
@@ -296,7 +320,13 @@ def add_workflow(
         sys.exit(1)
 
     # Get workflow template from multi-workflow template
-    template_dir = Path(__file__).parent / "templates" / "multi_workflow_template" / "workflows" / "{{workflow_name}}"
+    template_dir = (
+        Path(__file__).parent
+        / "templates"
+        / "multi_workflow_template"
+        / "workflows"
+        / "{{workflow_name}}"
+    )
     if not template_dir.exists():
         print(f"Error: Workflow template not found: {template_dir}")
         sys.exit(1)
@@ -321,7 +351,7 @@ def add_workflow(
 
         # Get relative path from workflow template directory
         rel_path = template_file.relative_to(template_dir)
-        
+
         # Skip __pycache__ and .pyc files
         if "__pycache__" in rel_path.parts or rel_path.suffix == ".pyc":
             continue
@@ -343,7 +373,9 @@ def add_workflow(
     print(f"✓ Added workflow '{workflow_name}' to {proj_dir}")
     print(f"\nNext steps:")
     print(f"  1. Update db_models.py:")
-    print(f"     - Import: from workflows.{workflow_name}.models import {workflow_class_name}Event, {workflow_class_name}Command")
+    print(
+        f"     - Import: from workflows.{workflow_name}.models import {workflow_class_name}Event, {workflow_class_name}Command"
+    )
     print(f"     - Add to AllEvents union: ... | {workflow_class_name}Event")
     print(f"     - Add to AllCommands union: ... | {workflow_class_name}Command")
     print(f"  2. Update main.py to set up the workflow runner")

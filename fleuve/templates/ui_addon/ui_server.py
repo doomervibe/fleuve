@@ -1,4 +1,5 @@
 """Standalone server for {{project_title}} UI."""
+
 import asyncio
 import logging
 import os
@@ -24,15 +25,15 @@ async def create_session_maker():
     """Create database session maker from environment variables."""
     database_url = os.getenv(
         "DATABASE_URL",
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/{{project_name}}"
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/{{project_name}}",
     )
-    
+
     engine = create_async_engine(
         database_url,
         echo=False,
         pool_pre_ping=True,
     )
-    
+
     return async_sessionmaker(
         engine,
         class_=AsyncSession,
@@ -45,38 +46,45 @@ def main():
     # Get port from environment or use default
     port = int(os.getenv("UI_PORT", "8001"))
     host = os.getenv("UI_HOST", "0.0.0.0")
-    
+
     # Get frontend path
     frontend_dist_path = Path(__file__).parent / "ui" / "frontend" / "dist"
-    
-    if not frontend_dist_path.exists() or not (frontend_dist_path / "index.html").exists():
+
+    if (
+        not frontend_dist_path.exists()
+        or not (frontend_dist_path / "index.html").exists()
+    ):
         logger.warning(
             f"UI frontend not built. Run 'npm run build' in {frontend_dist_path.parent} "
             "to enable the UI. The API will still work, but the web interface won't be available."
         )
-    
+
     async def create_app_with_db():
         """Create the app with database connection."""
         session_maker = await create_session_maker()
-        
+
         app = create_app(
             session_maker=session_maker,
             event_model=StoredEvent,
             activity_model=Activity,
             delay_schedule_model=DelaySchedule,
             subscription_model=Subscription,
-            frontend_dist_path=frontend_dist_path if frontend_dist_path.exists() else None,
+            frontend_dist_path=(
+                frontend_dist_path if frontend_dist_path.exists() else None
+            ),
         )
         return app
-    
+
     # Create the app
     app = asyncio.run(create_app_with_db())
-    
+
     logger.info(f"Starting {{project_title}} UI server on http://{host}:{port}")
     logger.info(f"API available at: http://{host}:{port}/api")
     logger.info(f"Frontend path: {frontend_dist_path}")
-    logger.info(f"Frontend available: {frontend_dist_path.exists() and (frontend_dist_path / 'index.html').exists()}")
-    
+    logger.info(
+        f"Frontend available: {frontend_dist_path.exists() and (frontend_dist_path / 'index.html').exists()}"
+    )
+
     uvicorn.run(
         app,
         host=host,

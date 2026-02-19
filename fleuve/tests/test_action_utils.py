@@ -1,6 +1,7 @@
 """
 Unit tests for fleuve.action_utils module.
 """
+
 import asyncio
 
 import pytest
@@ -14,6 +15,7 @@ class TestRunWithBackgroundCheck:
     @pytest.mark.asyncio
     async def test_yields_all_items_when_condition_never_met(self):
         """Test that all items are yielded when condition never returns True."""
+
         async def gen():
             for i in range(3):
                 yield f"item-{i}"
@@ -61,6 +63,7 @@ class TestRunWithBackgroundCheck:
     @pytest.mark.asyncio
     async def test_stops_without_on_stop_cmd_when_condition_met(self):
         """Test that generator stops when condition is met even without on_stop_cmd."""
+
         async def condition():
             await asyncio.sleep(0.05)
             return True
@@ -87,6 +90,7 @@ class TestRunWithBackgroundCheck:
     @pytest.mark.asyncio
     async def test_empty_generator(self):
         """Test with empty generator."""
+
         async def gen():
             if False:
                 yield

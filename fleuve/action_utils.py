@@ -1,6 +1,7 @@
 """
 Utilities for action execution, including background condition checks.
 """
+
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -50,9 +51,7 @@ async def run_with_background_check(
                     stop_event.set()
                     return
             except Exception as e:
-                logger.warning(
-                    "Background check condition raised, continuing: %s", e
-                )
+                logger.warning("Background check condition raised, continuing: %s", e)
             await asyncio.sleep(interval)
 
     checker_task = asyncio.create_task(checker())

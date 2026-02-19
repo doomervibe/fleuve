@@ -1,0 +1,11 @@
+[run]
+source = fleuve
+omit = 
+    fleuve/tests/*
+    */__pycache__/*
+    */site-packages/*
+
+[report]
+precision = 2
+show_missing = True
+skip_covered = False

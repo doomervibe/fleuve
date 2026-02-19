@@ -8,6 +8,7 @@ When adding a new workflow:
 1. Import its Event and Command types below
 2. Add them to the AllEvents and AllCommands union types
 """
+
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.ext.declarative import declared_attr
 
@@ -46,8 +47,10 @@ AllCommands = None  # type: ignore
 # Shared Database Tables
 # ============================================================================
 
+
 class StoredEvent(StoredEvent_):
     """Table for storing workflow events from ALL workflows."""
+
     __tablename__ = "events"
 
     @declared_attr
@@ -60,16 +63,19 @@ class StoredEvent(StoredEvent_):
 
 class Subscription(Subscription_):
     """Table for storing workflow subscriptions from ALL workflows."""
+
     __tablename__ = "subscriptions"
 
 
 class Activity(Activity_):
     """Table for storing action execution tracking from ALL workflows."""
+
     __tablename__ = "activities"
 
 
 class DelaySchedule(DelaySchedule_):
     """Table for storing delay schedules from ALL workflows."""
+
     __tablename__ = "delay_schedules"
 
     @declared_attr
@@ -82,4 +88,5 @@ class DelaySchedule(DelaySchedule_):
 
 class Offset(Offset_):
     """Table for storing stream reader offsets."""
+
     __tablename__ = "offsets"

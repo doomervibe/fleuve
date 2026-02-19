@@ -1,6 +1,7 @@
 """
 Unit tests for les.postgres module.
 """
+
 import os
 import pytest
 
@@ -80,6 +81,7 @@ class TestPydanticType:
         # Should return JSON string (not bytes) for JSONB columns
         assert isinstance(result, str)
         import json
+
         assert json.loads(result) == {"value": 42, "text": "test"}
 
     def test_process_bind_param_none(self):

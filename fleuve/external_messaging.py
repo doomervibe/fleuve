@@ -7,6 +7,7 @@ The runner listens for messages and routes them to workflows by:
 - by workflow id (single workflow)
 - by topic (workflows subscribed to the message topic in the subscription table)
 """
+
 import asyncio
 import json
 import logging
@@ -30,9 +31,7 @@ ROUTING_ID = "id"
 ROUTING_TOPIC = "topic"
 
 
-def parse_subject(
-    subject: str, expected_workflow_type: str
-) -> tuple[str, str] | None:
+def parse_subject(subject: str, expected_workflow_type: str) -> tuple[str, str] | None:
     """Parse external message subject into routing mode and detail.
 
     Subject pattern: messages.{workflow_type}.{routing}.{detail}
@@ -51,7 +50,11 @@ def parse_subject(
     parts = subject[len(EXTERNAL_SUBJECT_PREFIX) :].split(".", 2)
     if len(parts) < 3:
         return None
-    workflow_type, routing, detail = parts[0], parts[1], parts[2] if len(parts) > 2 else ""
+    workflow_type, routing, detail = (
+        parts[0],
+        parts[1],
+        parts[2] if len(parts) > 2 else "",
+    )
     if workflow_type != expected_workflow_type:
         return None
     if routing not in (ROUTING_ALL, ROUTING_TAG, ROUTING_ID, ROUTING_TOPIC):
@@ -119,10 +122,12 @@ async def resolve_workflow_ids(
                 )
             else:
                 result = await s.execute(
-                    select(db_external_sub_type.workflow_id).where(
+                    select(db_external_sub_type.workflow_id)
+                    .where(
                         db_external_sub_type.workflow_type == workflow_type,
                         db_external_sub_type.topic == detail,
-                    ).distinct()
+                    )
+                    .distinct()
                 )
                 workflow_ids = [row[0] for row in result.fetchall()]
 
@@ -280,9 +285,7 @@ class ExternalMessageConsumer:
                         await self._process_message(msg)
                         await msg.ack()
                     except Exception as e:
-                        logger.exception(
-                            f"Failed to process external message: {e}"
-                        )
+                        logger.exception(f"Failed to process external message: {e}")
                         await msg.nak()
             except asyncio.TimeoutError:
                 continue

@@ -1,6 +1,7 @@
 """
 Unit tests for les.delay module.
 """
+
 import asyncio
 import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -65,7 +66,9 @@ class TestDelayScheduler:
         """Test registering a delay."""
         from fleuve.tests.conftest import TestCommand
 
-        delay_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=30)
+        delay_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+            seconds=30
+        )
         delay_event = EvDelay(
             id="delay-1",
             delay_until=delay_until,
@@ -80,9 +83,11 @@ class TestDelayScheduler:
 
         # Verify delay schedule was created in database
         from sqlalchemy import select
+
         schedule = await test_session.scalar(
-            select(delay_scheduler._db_delay_schedule_model)
-            .where(delay_scheduler._db_delay_schedule_model.workflow_id == "wf-1")
+            select(delay_scheduler._db_delay_schedule_model).where(
+                delay_scheduler._db_delay_schedule_model.workflow_id == "wf-1"
+            )
         )
         assert schedule is not None
         assert schedule.workflow_id == "wf-1"
@@ -110,7 +115,9 @@ class TestDelayScheduler:
         from sqlalchemy import select
 
         # Create a delay schedule in database
-        delay_until = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)  # Past
+        delay_until = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            seconds=10
+        )  # Past
         schedule = delay_scheduler._db_delay_schedule_model(
             workflow_id="wf-1",
             delay_id="delay-1",
@@ -120,7 +127,7 @@ class TestDelayScheduler:
             next_command=TestCommand(action="resume", value=10),
         )
         test_session.add(schedule)
-        
+
         # Create an event at version 5
         event = delay_scheduler._db_event_model(
             workflow_id="wf-1",
@@ -138,14 +145,20 @@ class TestDelayScheduler:
         # Verify EvDelayComplete event was created
         # EvDelayComplete is an abstract class, check for the concrete type
         from fleuve.model import EvDelayComplete
+
         complete_event = await test_session.scalar(
             select(delay_scheduler._db_event_model)
             .where(delay_scheduler._db_event_model.workflow_id == "wf-1")
-            .where(delay_scheduler._db_event_model.workflow_version == 6)  # version 5 + 1
+            .where(
+                delay_scheduler._db_event_model.workflow_version == 6
+            )  # version 5 + 1
         )
         assert complete_event is not None
         # Check that it's a delay_complete type event
-        assert "delay" in complete_event.event_type.lower() or complete_event.event_type == "delay_complete"
+        assert (
+            "delay" in complete_event.event_type.lower()
+            or complete_event.event_type == "delay_complete"
+        )
 
     @pytest.mark.asyncio
     async def test_resume_workflow_no_events(
@@ -158,7 +171,9 @@ class TestDelayScheduler:
         from fleuve.tests.conftest import TestCommand
 
         # Create a delay schedule for a workflow with no events
-        delay_until = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)  # Past
+        delay_until = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            seconds=10
+        )  # Past
         schedule = delay_scheduler._db_delay_schedule_model(
             workflow_id="wf-1",
             delay_id="delay-1",
@@ -175,9 +190,11 @@ class TestDelayScheduler:
 
         # Verify delay schedule was deleted
         from sqlalchemy import select
+
         schedule_check = await test_session.scalar(
-            select(delay_scheduler._db_delay_schedule_model)
-            .where(delay_scheduler._db_delay_schedule_model.workflow_id == "wf-1")
+            select(delay_scheduler._db_delay_schedule_model).where(
+                delay_scheduler._db_delay_schedule_model.workflow_id == "wf-1"
+            )
         )
         assert schedule_check is None
 

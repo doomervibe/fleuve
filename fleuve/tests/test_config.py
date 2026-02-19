@@ -1,6 +1,7 @@
 """
 Tests for les.config module.
 """
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -138,6 +139,7 @@ class TestMakeRunnerFromConfig:
         self, workflow_config, mock_repo, mock_session_maker
     ):
         """Test creating a runner from config with wf_id_rule."""
+
         def wf_id_rule(workflow_id: str) -> bool:
             return workflow_id.startswith("test-")
 

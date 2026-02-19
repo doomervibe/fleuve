@@ -51,6 +51,7 @@ from fleuve.partitioning import (
 # PostgreSQL models
 from fleuve.postgres import (
     RetryPolicy,
+    Snapshot,
     StoredEvent,
     Subscription,
     ExternalSubscription,
@@ -73,6 +74,12 @@ from fleuve.action_utils import run_with_background_check
 # Delay
 from fleuve.delay import DelayScheduler
 
+# Tracing
+from fleuve.tracing import FleuveTracer
+
+# Gateway
+from fleuve.gateway import FleuveCommandGateway
+
 # Scaling
 from fleuve.scaling import (
     rebalance_partitions,
@@ -84,6 +91,9 @@ from fleuve.scaling import (
 
 # Simplified setup
 from fleuve.setup import create_workflow_runner, WorkflowRunnerResources
+
+# Truncation
+from fleuve.truncation import TruncationService
 
 # External NATS messaging
 from fleuve.external_messaging import (
@@ -135,6 +145,7 @@ __all__ = [
     "make_reader_name",
     # PostgreSQL
     "RetryPolicy",
+    "Snapshot",
     "StoredEvent",
     "Subscription",
     "ExternalSubscription",
@@ -156,6 +167,10 @@ __all__ = [
     "run_with_background_check",
     # Delay
     "DelayScheduler",
+    # Tracing
+    "FleuveTracer",
+    # Gateway
+    "FleuveCommandGateway",
     # Scaling
     "rebalance_partitions",
     "scale_up_partitions",
@@ -165,6 +180,8 @@ __all__ = [
     # Setup
     "create_workflow_runner",
     "WorkflowRunnerResources",
+    # Truncation
+    "TruncationService",
     # External messaging
     "parse_subject",
     "resolve_workflow_ids",

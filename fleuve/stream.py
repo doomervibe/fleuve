@@ -243,11 +243,11 @@ class Reader(Generic[T]):
 
 class HybridReader(Reader[T]):
     """Reader that consumes from NATS JetStream with PostgreSQL fallback.
-    
+
     This reader attempts to consume events from NATS JetStream for low-latency
     push-based delivery. If JetStream is unavailable or fails, it automatically
     falls back to the traditional PostgreSQL polling approach.
-    
+
     Benefits:
     - 10-100x lower latency than PostgreSQL polling
     - 90%+ reduction in PostgreSQL query load
@@ -268,7 +268,7 @@ class HybridReader(Reader[T]):
         enable_fallback: bool = True,
     ):
         """Initialize hybrid reader.
-        
+
         Args:
             reader_name: Unique reader name for offset tracking
             s: SQLAlchemy session maker
@@ -367,7 +367,7 @@ class HybridReader(Reader[T]):
 
 class Readers:
     """Factory for creating event stream readers.
-    
+
     Supports both traditional PostgreSQL readers and hybrid JetStream readers
     with automatic fallback.
     """
@@ -384,7 +384,7 @@ class Readers:
         workflow_type: str | None = None,
     ) -> None:
         """Initialize reader factory.
-        
+
         Args:
             pg_session_maker: SQLAlchemy session maker
             model: StoredEvent model class
@@ -410,11 +410,11 @@ class Readers:
         event_types: list[str] | None = None,
     ) -> Reader:
         """Create a reader (hybrid if JetStream enabled, standard otherwise).
-        
+
         Args:
             reader_name: Unique reader name for offset tracking
             event_types: List of event types to filter, or None for all
-            
+
         Returns:
             HybridReader if JetStream is enabled, standard Reader otherwise
         """

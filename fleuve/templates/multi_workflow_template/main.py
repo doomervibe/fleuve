@@ -1,4 +1,5 @@
 """Main entry point for {{project_title}} workflows."""
+
 import asyncio
 import logging
 from pathlib import Path
@@ -75,12 +76,12 @@ async def main():
         except KeyboardInterrupt:
             logger.info("Stopping workflow runner...")
     """
-    
+
     # For multiple workflows, consider:
     # - Running them in separate tasks with asyncio.gather()
     # - Using a shared database session maker
     # - Managing lifecycle with asyncio.TaskGroup (Python 3.11+)
-    
+
     logger.info("TODO: Implement your workflow runners")
 
 

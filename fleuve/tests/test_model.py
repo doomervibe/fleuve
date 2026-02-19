@@ -1,6 +1,7 @@
 """
 Unit tests for les.model module.
 """
+
 import datetime
 from abc import ABC
 from typing import Literal
@@ -27,11 +28,13 @@ class TestEventBase:
     def test_event_base_requires_type_override(self):
         """Test that subclasses must override the type field."""
         with pytest.raises(TypeError, match="must override `type` with a Literal"):
+
             class InvalidEvent(EventBase):
                 pass
 
     def test_valid_event_subclass(self):
         """Test creating a valid event subclass."""
+
         class ValidEvent(EventBase):
             type: Literal["valid_event"] = "valid_event"
             data: str
@@ -42,6 +45,7 @@ class TestEventBase:
 
     def test_event_serialization(self):
         """Test event can be serialized to JSON."""
+
         class TestEvent(EventBase):
             type: Literal["test"] = "test"
             value: int
@@ -67,8 +71,7 @@ class TestBuiltInEvents:
             type: Literal["concrete_direct"] = "concrete_direct"
 
         event = ConcreteDirectMessage(
-            target_workflow_id="wf-123",
-            target_workflow_type="test_workflow"
+            target_workflow_id="wf-123", target_workflow_type="test_workflow"
         )
         # Subclass should use its own type field
         assert event.type == "concrete_direct"
@@ -105,7 +108,9 @@ class TestBuiltInEvents:
         class ConcreteDelay(EvDelay[TestCmd]):
             type: Literal["concrete_delay"] = "concrete_delay"
 
-        delay_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=30)
+        delay_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+            seconds=30
+        )
         next_cmd = TestCmd(action="resume")
         event = ConcreteDelay(id="delay-1", delay_until=delay_until, next_cmd=next_cmd)
         assert event.type == "concrete_delay"
@@ -163,6 +168,7 @@ class TestActionContext:
         assert context.checkpoint == {"step": 2}
         assert context.retry_count == 1
         assert context.retry_policy == retry_policy
+
 
 class TestWorkflow:
     """Tests for Workflow abstract class."""
@@ -243,6 +249,7 @@ class TestWorkflow:
         # Import from conftest using sys.path or direct import
         import sys
         from pathlib import Path
+
         sys.path.insert(0, str(Path(__file__).parent))
         from conftest import TestCommand
 

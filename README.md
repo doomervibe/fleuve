@@ -163,6 +163,38 @@ See the [Step-by-Step Tutorial](#step-by-step-tutorial) for a complete working e
 - **Low latency**: Access workflow state without database queries
 - **Automatic invalidation**: Cache automatically invalidated on updates
 
+### Command Gateway
+- **HTTP API**: Expose workflow commands via REST for non-Python clients
+- **Command parsing**: Registry maps `(command_type, payload)` to typed commands per workflow
+- **Lifecycle endpoints**: Pause, resume, and cancel workflows via HTTP
+- **Retry failed actions**: POST endpoint to retry failed activities from the dead letter queue
+
+### Lifecycle Management
+- **Pause/Resume/Cancel**: System events (`EvSystemPause`, `EvSystemResume`, `EvSystemCancel`) control workflow lifecycle
+- **State lifecycle field**: `StateBase.lifecycle` tracks `active`, `paused`, or `cancelled`
+- **Guarded processing**: Commands rejected for paused or cancelled workflows
+
+### Snapshots & Event Truncation
+- **Automatic snapshots**: Periodic state snapshots at configurable intervals (e.g., every N events)
+- **Faster state load**: `load_state` uses snapshots to skip replaying old events
+- **Event truncation**: Background service safely deletes events covered by snapshots
+- **Retention controls**: Min retention period, reader offset awareness, batch limits
+
+### Dead Letter Queue
+- **Failed action tracking**: Activities that exceed retries are tracked as failed
+- **Retry endpoint**: Manually retry failed actions via Command Gateway or `ActionExecutor.retry_failed_action`
+- **Optional callback**: `on_action_failed` for custom handling (alerts, DLQ routing)
+
+### OpenTelemetry Tracing
+- **Optional tracing**: Instrument `process_command`, `load_state`, `execute_action`, and Readers
+- **FleuveTracer**: Lightweight tracer with span creation; no-op when OTEL not installed
+- **Observability**: Integrate with Jaeger, Zipkin, or any OTLP-compatible backend
+
+### Event Replay & Simulate
+- **State reconstruction**: Rebuild workflow state from events at any version (time travel)
+- **Replay endpoint**: POST to replay events and get resulting state
+- **Simulate (what-if)**: Apply hypothetical commands without persisting; useful for validation
+
 ## Installation
 
 ### Requirements
@@ -1084,6 +1116,116 @@ You should see:
 
 ## Advanced Features
 
+### Command Gateway
+
+The **FleuveCommandGateway** exposes workflow commands via HTTP for non-Python clients (e.g., frontends, mobile apps, other services). Mount it in your FastAPI app or use it via the Fleuve UI backend.
+
+**Endpoints:**
+- `POST /commands/{workflow_type}` — Create a new workflow (body: `workflow_id`, `command_type`, `payload`)
+- `POST /commands/{workflow_type}/{workflow_id}` — Process a command on an existing workflow
+- `POST /commands/{workflow_type}/{workflow_id}/pause` — Pause a workflow
+- `POST /commands/{workflow_type}/{workflow_id}/resume` — Resume a paused workflow
+- `POST /commands/{workflow_type}/{workflow_id}/cancel` — Cancel a workflow
+- `POST /commands/retry/{workflow_id}/{activity_id}` — Retry a failed action (requires `action_executor`)
+
+**Command parsers** map `(command_type, payload)` to your typed Command model:
+
+```python
+from fleuve.gateway import FleuveCommandGateway
+
+def parse_order_command(cmd_type: str, payload: dict):
+    if cmd_type == "place":
+        return CmdPlaceOrder(**payload)
+    if cmd_type == "ship":
+        return CmdShipOrder(**payload)
+    raise ValueError(f"Unknown command: {cmd_type}")
+
+gateway = FleuveCommandGateway(
+    repos={"order": repo},
+    command_parsers={"order": parse_order_command},
+    action_executor=executor,  # optional, for retry endpoint
+)
+app.include_router(gateway.router)
+```
+
+When using **Fleuve UI**, pass `repos` and `command_parsers` to `create_app`; the gateway is mounted automatically at `/commands`.
+
+### Snapshots & Event Truncation
+
+Reduce event replay time and storage by enabling **automatic snapshots** and **event truncation**.
+
+**Snapshots** are periodic state checkpoints (e.g., every 3 events). When loading state, the repo uses the latest snapshot and replays only events after it.
+
+**Truncation** deletes old events that are safely covered by snapshots. Events are only deleted when:
+- A snapshot exists at version V (events before V are redundant)
+- All readers have processed the event (global_id below min reader offset)
+- The event has been published (pushed)
+- The event is older than the configured min retention period
+
+```python
+# In create_workflow_runner or WorkflowConfig
+db_snapshot_model=OrderSnapshotModel,
+snapshot_interval=3,           # snapshot every 3 events
+enable_truncation=True,
+truncation_min_retention=timedelta(days=7),
+truncation_batch_size=1000,
+truncation_check_interval=timedelta(hours=1),
+```
+
+### Lifecycle Management
+
+Workflows can be **paused**, **resumed**, or **cancelled** via system events. The `StateBase.lifecycle` field tracks `active`, `paused`, or `cancelled`.
+
+```python
+# Via AsyncRepo
+await repo.pause_workflow("order-123")
+await repo.resume_workflow("order-123")
+await repo.cancel_workflow("order-123", reason="Customer requested cancellation")
+
+# Via Command Gateway
+POST /commands/order/order-123/pause
+POST /commands/order/order-123/resume
+POST /commands/order/order-123/cancel  # body: {"reason": "..."}
+```
+
+When a workflow is paused or cancelled, `process_command` rejects new commands with an appropriate message.
+
+### Dead Letter Queue & Retry Failed Actions
+
+When an activity exceeds its retry limit, it is marked as failed. You can:
+
+1. **Retry via ActionExecutor**: `await action_executor.retry_failed_action(workflow_id, activity_id)`
+2. **Retry via Command Gateway**: `POST /commands/retry/{workflow_id}/{activity_id}` (requires `action_executor` passed to the gateway)
+3. **Optional callback**: Pass `on_action_failed` to the ActionExecutor for custom handling (alerts, external DLQ routing)
+
+### OpenTelemetry Tracing
+
+Enable optional tracing for observability:
+
+```python
+from fleuve.tracing import FleuveTracer
+
+tracer = FleuveTracer(service_name="order-workflow")
+# Pass to create_workflow_runner or WorkflowConfig
+enable_otel=True
+# Or set tracer explicitly in WorkflowConfig
+```
+
+Spans are created for `process_command`, `load_state`, `execute_action`, and Reader operations. Install `opentelemetry-api` and `opentelemetry-sdk` for full support; without them, a no-op tracer is used.
+
+### Event Replay & Simulate
+
+**Replay** reconstructs workflow state from events at a given version (time travel). The Fleuve UI exposes `GET /api/workflows/{id}/state/{version}` for this.
+
+**Simulate** applies hypothetical commands without persisting. Useful for validation or what-if analysis:
+
+```python
+# Via Fleuve UI API when workflow_types and command_parsers are provided
+POST /api/workflows/{workflow_id}/simulate
+# body: {"command_type": "...", "payload": {...}}
+# Returns the resulting state without persisting events
+```
+
 ### Delays and Scheduling
 
 Workflows can delay for a specified duration using `EvDelay` events:
@@ -1131,6 +1273,47 @@ def event_to_cmd(cls, e: ConsumedEvent) -> Command | None:
 2. `DelayScheduler` detects the event and stores the schedule
 3. When time arrives, `DelayScheduler` emits `EvDelayComplete` event
 4. The stored `next_cmd` is automatically processed
+
+### Workflow Versioning / Schema Evolution
+
+When evolving event schemas, use `schema_version` and `upcast` to migrate old events:
+
+**1. Add an optional field (no upcast needed):**
+```python
+class EvOrderPlaced(EventBase):
+    type: Literal["order.placed"] = "order.placed"
+    order_id: str
+    amount: int
+    notes: str = ""  # New optional field - old events load with default
+```
+
+**2. Rename a field (override `upcast`):**
+```python
+class MyWorkflow(Workflow[...]):
+    @classmethod
+    def schema_version(cls) -> int:
+        return 2  # Bump when schema changes
+
+    @classmethod
+    def upcast(cls, event_type: str, schema_version: int, raw_data: dict) -> dict:
+        if event_type == "order.placed" and schema_version < 2:
+            raw_data["amount"] = raw_data.pop("total", 0)  # Rename total -> amount
+        return raw_data
+```
+
+**3. Change a field type (override `upcast`):**
+```python
+@classmethod
+def upcast(cls, event_type: str, schema_version: int, raw_data: dict) -> dict:
+    if event_type == "order.placed" and schema_version < 2:
+        raw_data["amount"] = int(raw_data.get("amount", 0))  # str -> int
+    return raw_data
+```
+
+Add a `body_raw` generated column to your event model for upcasting:
+```python
+body_raw: Mapped[dict] = mapped_column(JSONB, Computed("body", persisted=True), nullable=True)
+```
 
 ### Subscriptions (Cross-Workflow Communication)
 

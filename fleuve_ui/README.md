@@ -11,6 +11,9 @@ A comprehensive, generic UI for the LES (Lightweight Event Sourcing) Framework t
 - **Activity Monitor**: Monitor action execution, retries, and errors
 - **Delay Viewer**: View scheduled delays with live countdown timers
 - **Real-time Updates**: Automatic polling for live data updates
+- **Command Gateway**: When `repos` and `command_parsers` are provided, exposes `/commands` REST API for create, process, pause, resume, cancel, and retry
+- **Event Replay**: Reconstruct workflow state at any version; POST `/api/workflows/{id}/replay`
+- **Simulate (what-if)**: Apply hypothetical commands without persisting; POST `/api/workflows/{id}/simulate`
 
 ## Installation
 
@@ -32,6 +35,11 @@ app = create_app(
     delay_schedule_model=DelaySchedule,
     subscription_model=Subscription,
     frontend_dist_path=Path(__file__).parent / "fleuve_ui" / "frontend" / "dist",
+    # Optional: enable Command Gateway, Replay, and Simulate
+    repo=repo,
+    workflow_types={"order": OrderWorkflow},
+    command_parsers={"order": parse_order_command},
+    action_executor=executor,  # optional, for retry endpoint
 )
 ```
 
@@ -96,6 +104,7 @@ Once the UI is running, access it at the root URL of your FastAPI server. The UI
 
 ## API Endpoints
 
+### Core
 - `GET /api/workflow-types` - List all workflow types
 - `GET /api/workflows` - List workflows with filtering
 - `GET /api/workflows/{id}` - Get workflow details
@@ -105,6 +114,18 @@ Once the UI is running, access it at the root URL of your FastAPI server. The UI
 - `GET /api/activities` - List activities with filtering
 - `GET /api/delays` - List delays with filtering
 - `GET /api/stats` - Get dashboard statistics
+
+### Replay & Simulate (when `workflow_types` and `command_parsers` provided)
+- `POST /api/workflows/{id}/replay` - Reconstruct state from events (body: `from_version` optional)
+- `POST /api/workflows/{id}/simulate` - Apply hypothetical command without persisting (body: `command_type`, `payload`)
+
+### Command Gateway (when `repos` and `command_parsers` provided)
+- `POST /commands/{workflow_type}` - Create new workflow
+- `POST /commands/{workflow_type}/{workflow_id}` - Process command
+- `POST /commands/{workflow_type}/{workflow_id}/pause` - Pause workflow
+- `POST /commands/{workflow_type}/{workflow_id}/resume` - Resume workflow
+- `POST /commands/{workflow_type}/{workflow_id}/cancel` - Cancel workflow
+- `POST /commands/retry/{workflow_id}/{activity_id}` - Retry failed action (requires `action_executor`)
 
 ## License
 

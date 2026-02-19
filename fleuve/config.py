@@ -1,8 +1,10 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Callable, Type
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from fleuve.external_messaging import ExternalMessageConsumer
 from fleuve.model import Adapter, Workflow
 from fleuve.partitioning import PartitionedRunnerConfig
 from fleuve.postgres import (
@@ -10,6 +12,7 @@ from fleuve.postgres import (
     DelaySchedule,
     Offset,
     ScalingOperation,
+    Snapshot,
     StoredEvent,
     Subscription,
 )
@@ -35,9 +38,25 @@ class WorkflowConfig:
     external_stream_name: str | None = None
     external_message_parser: Any = None  # Callable[[bytes], BaseModel] or Pydantic type
     db_workflow_metadata_model: Type[Any] | None = None
-    db_external_sub_type: Type[Any] | None = None  # ExternalSubscription model for topic routing
+    db_external_sub_type: Type[Any] | None = (
+        None  # ExternalSubscription model for topic routing
+    )
     # Strongly consistent DB sync: pass to AsyncRepo(sync_db=...) when building repo from config
     sync_db: SyncDbHandler | None = None
+    # Snapshotting
+    db_snapshot_model: Type[Snapshot] | None = None
+    snapshot_interval: int = 0  # 0 = disabled; snapshot every N events per workflow
+    # Event truncation (requires snapshotting)
+    truncation_enabled: bool = False
+    truncation_min_retention: timedelta = field(
+        default_factory=lambda: timedelta(days=7)
+    )
+    truncation_batch_size: int = 1000
+    truncation_check_interval: timedelta = field(
+        default_factory=lambda: timedelta(hours=1)
+    )
+    # OpenTelemetry tracing (optional)
+    tracer: Any = None  # FleuveTracer instance
 
 
 def make_runner_from_config(
@@ -79,9 +98,9 @@ def make_runner_from_config(
         A configured WorkflowsRunner
     """
     external_consumer = None
-    if (config.external_messaging_enabled or external_messaging_enabled) and nats_client:
-        from fleuve.external_messaging import ExternalMessageConsumer
-
+    if (
+        config.external_messaging_enabled or external_messaging_enabled
+    ) and nats_client:
         stream_name = (
             external_stream_name
             or config.external_stream_name
@@ -125,7 +144,10 @@ def make_runner_from_config(
             db_activity_model=config.db_activity_model,
             db_event_model=config.db_event_model,
             db_delay_schedule_model=config.db_delay_schedule_model,
-            action_executor_kwargs=action_executor_kwargs,
+            action_executor_kwargs={
+                **action_executor_kwargs,
+                **({"tracer": config.tracer} if config.tracer else {}),
+            },
             delay_scheduler_kwargs=delay_scheduler_kwargs,
         ),
         wf_id_rule=config.wf_id_rule,

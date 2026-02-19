@@ -1,6 +1,7 @@
 """
 Unit tests for les.repo module.
 """
+
 import asyncio
 import uuid
 from typing import Literal
@@ -205,7 +206,7 @@ class TestAsyncRepo:
 
         # Enter context manager to initialize bucket
         await storage.__aenter__()
-        
+
         yield storage
 
         # Cleanup: exit context manager and delete bucket
@@ -256,6 +257,7 @@ class TestAsyncRepo:
 
         # Verify event was stored in database
         from sqlalchemy import select
+
         event = await test_session.scalar(
             select(repo.db_event_model)
             .where(repo.db_event_model.workflow_id == "wf-1")
@@ -390,13 +392,13 @@ class TestAsyncRepo:
         )
 
         # create_new success: sync_db runs, row visible after commit
-        result = await repo.create_new(TestCommand(action="create", value=10), "wf-sync-1")
+        result = await repo.create_new(
+            TestCommand(action="create", value=10), "wf-sync-1"
+        )
         assert not isinstance(result, Rejection)
-        rows = (
-            await test_session.execute(
-                select(WorkflowSyncLogModel).where(
-                    WorkflowSyncLogModel.workflow_id == "wf-sync-1"
-                )
+        rows = await test_session.execute(
+            select(WorkflowSyncLogModel).where(
+                WorkflowSyncLogModel.workflow_id == "wf-sync-1"
             )
         )
         log_rows = rows.scalars().all()
@@ -405,11 +407,9 @@ class TestAsyncRepo:
 
         # process_command: sync_db runs again, second row in same DB
         await repo.process_command("wf-sync-1", TestCommand(action="update", value=5))
-        rows2 = (
-            await test_session.execute(
-                select(WorkflowSyncLogModel).where(
-                    WorkflowSyncLogModel.workflow_id == "wf-sync-1"
-                )
+        rows2 = await test_session.execute(
+            select(WorkflowSyncLogModel).where(
+                WorkflowSyncLogModel.workflow_id == "wf-sync-1"
             )
         )
         log_rows2 = rows2.scalars().all()
@@ -421,11 +421,9 @@ class TestAsyncRepo:
             TestCommand(action="create", value=-1), "wf-reject"
         )
         assert isinstance(reject_result, Rejection)
-        rows_reject = (
-            await test_session.execute(
-                select(WorkflowSyncLogModel).where(
-                    WorkflowSyncLogModel.workflow_id == "wf-reject"
-                )
+        rows_reject = await test_session.execute(
+            select(WorkflowSyncLogModel).where(
+                WorkflowSyncLogModel.workflow_id == "wf-reject"
             )
         )
         assert len(rows_reject.scalars().all()) == 0
@@ -471,7 +469,9 @@ class TestAsyncRepo:
             adapter=adapter,
         )
 
-        result = await repo.create_new(TestCommand(action="create", value=10), "wf-adapter-1")
+        result = await repo.create_new(
+            TestCommand(action="create", value=10), "wf-adapter-1"
+        )
         assert not isinstance(result, Rejection)
         rows_result = await test_session.execute(
             select(WorkflowSyncLogModel).where(
@@ -481,3 +481,71 @@ class TestAsyncRepo:
         rows = rows_result.scalars().all()
         assert len(rows) == 1
         assert rows[0].events_count == 1
+
+    @pytest.mark.asyncio
+    async def test_pause_resume_workflow(
+        self,
+        test_session_maker,
+        ephemeral_storage,
+        test_event_model,
+        test_subscription_model,
+        clean_tables,
+    ):
+        """Test pause and resume workflow lifecycle."""
+        repo = AsyncRepo(
+            session_maker=test_session_maker,
+            es=ephemeral_storage,
+            model=TestWorkflow,
+            db_event_model=test_event_model,
+            db_sub_model=test_subscription_model,
+        )
+        await repo.create_new(TestCommand(action="create", value=1), "wf-lifecycle-1")
+        result = await repo.pause_workflow("wf-lifecycle-1", reason="maintenance")
+        assert not isinstance(result, Rejection)
+        assert result.state.lifecycle == "paused"
+
+        # process_command on paused workflow should reject
+        reject = await repo.process_command(
+            "wf-lifecycle-1", TestCommand(action="update", value=5)
+        )
+        assert isinstance(reject, Rejection)
+        assert "paused" in reject.msg.lower()
+
+        result2 = await repo.resume_workflow("wf-lifecycle-1")
+        assert not isinstance(result2, Rejection)
+        assert result2.state.lifecycle == "active"
+
+        # Now process_command should succeed
+        result3 = await repo.process_command(
+            "wf-lifecycle-1", TestCommand(action="update", value=5)
+        )
+        assert not isinstance(result3, Rejection)
+
+    @pytest.mark.asyncio
+    async def test_cancel_workflow(
+        self,
+        test_session_maker,
+        ephemeral_storage,
+        test_event_model,
+        test_subscription_model,
+        clean_tables,
+    ):
+        """Test cancel workflow lifecycle."""
+        repo = AsyncRepo(
+            session_maker=test_session_maker,
+            es=ephemeral_storage,
+            model=TestWorkflow,
+            db_event_model=test_event_model,
+            db_sub_model=test_subscription_model,
+        )
+        await repo.create_new(TestCommand(action="create", value=1), "wf-cancel-1")
+        result = await repo.cancel_workflow("wf-cancel-1", reason="user requested")
+        assert not isinstance(result, Rejection)
+        assert result.state.lifecycle == "cancelled"
+
+        # process_command on cancelled workflow should reject
+        reject = await repo.process_command(
+            "wf-cancel-1", TestCommand(action="update", value=5)
+        )
+        assert isinstance(reject, Rejection)
+        assert "cancelled" in reject.msg.lower()

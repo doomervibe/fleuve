@@ -2,6 +2,7 @@
 
 This shows how to integrate the Fleuve UI into your existing FastAPI application.
 """
+
 from pathlib import Path
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -25,7 +26,7 @@ def integrate_ui(
 ):
     """
     Integrate Fleuve UI into your existing FastAPI application.
-    
+
     Args:
         main_app: Your main FastAPI application
         session_maker: Database session maker
@@ -39,7 +40,7 @@ def integrate_ui(
     if frontend_dist_path is None:
         # Default to the fleuve_ui frontend dist directory
         frontend_dist_path = Path(__file__).parent / "frontend" / "dist"
-    
+
     # Create the UI app
     ui_app = create_app(
         session_maker=session_maker,
@@ -49,25 +50,25 @@ def integrate_ui(
         subscription_model=subscription_model,
         frontend_dist_path=frontend_dist_path,
     )
-    
+
     # Mount the UI app
     main_app.mount(ui_path, ui_app)
-    
+
     return ui_app
 
 
 # Example usage:
-# 
+#
 # from fastapi import FastAPI
 # from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 # from your_project.db_models import StoredEvent, Activity, DelaySchedule, Subscription
-# 
+#
 # app = FastAPI()
-# 
+#
 # # Your database setup
 # engine = create_async_engine("postgresql+asyncpg://user:pass@localhost/db")
 # session_maker = async_sessionmaker(engine)
-# 
+#
 # # Integrate the UI
 # integrate_ui(
 #     main_app=app,
@@ -78,10 +79,10 @@ def integrate_ui(
 #     subscription_model=Subscription,
 #     ui_path="/ui",  # Access UI at http://localhost:8000/ui
 # )
-# 
+#
 # # Your other routes...
 # @app.get("/api/my-endpoint")
 # async def my_endpoint():
 #     return {"message": "Hello"}
-# 
+#
 # # Run with: uvicorn main:app --reload

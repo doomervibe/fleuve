@@ -1,3 +1,4 @@
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from typing import Any, Generic, Type, TypeVar
@@ -6,14 +7,28 @@ from uuid import uuid4
 from nats.aio.client import Client as NATS
 from nats.js.api import KeyValueConfig
 from nats.js.errors import BucketNotFoundError, KeyNotFoundError
-from pydantic import BaseModel
-from sqlalchemy import delete, insert, select
+from pydantic import BaseModel, TypeAdapter
+import logging
+
+from sqlalchemy import delete, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from typing_extensions import Self
 
-from fleuve.model import AlreadyExists, Rejection, StateBase, Workflow
-from fleuve.postgres import StoredEvent, Subscription
+from fleuve.model import (
+    AlreadyExists,
+    EvSystemCancel,
+    EvSystemPause,
+    EvSystemResume,
+    Rejection,
+    StateBase,
+    Workflow,
+)
+from fleuve.postgres import DelaySchedule, Snapshot, StoredEvent, Subscription
+from fleuve.tracing import _NoopTracer
+
+logger = logging.getLogger(__name__)
 
 # Define type variables for generic typing
 C = TypeVar("C", bound=BaseModel)  # Command type
@@ -25,9 +40,7 @@ Se = TypeVar("Se", bound=StoredEvent)  # StoredEvent subclass type
 # Callable run inside the same transaction as event insertion to update
 # denormalized/auxiliary DB data. Args: (session, workflow_id, old_state, new_state, events).
 # Must not commit; runs after subscription handling and before event insert.
-SyncDbHandler = Callable[
-    [AsyncSession, str, Any, Any, list[Any]], Awaitable[None]
-]
+SyncDbHandler = Callable[[AsyncSession, str, Any, Any, list[Any]], Awaitable[None]]
 
 
 class StoredState(BaseModel, Generic[S]):
@@ -135,8 +148,14 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         db_external_sub_model: Type[Any] | None = None,
         sync_db: SyncDbHandler | None = None,
         adapter: Any | None = None,
+        db_snapshot_model: Type[Snapshot] | None = None,
+        snapshot_interval: int = 0,
+        db_delay_schedule_model: Type[DelaySchedule] | None = None,
+        tracer: Any = None,
     ) -> None:
         self._workflow_type = model.name()
+        self._db_delay_schedule_model = db_delay_schedule_model
+        self._tracer = tracer or _NoopTracer()
         self._uuid = uuid4
         self._es = es
         self._session_maker: async_sessionmaker[AsyncSession] = session_maker
@@ -145,11 +164,15 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         self.db_sub_model = db_sub_model
         self.db_workflow_metadata_model = db_workflow_metadata_model
         self.db_external_sub_model = db_external_sub_model
+        self._db_snapshot_model = db_snapshot_model
+        self._snapshot_interval = snapshot_interval
         if sync_db is not None:
             self._sync_db_handler = sync_db
         elif adapter is not None:
 
-            async def _adapter_sync_db(s: AsyncSession, id_: str, old: Any, new: Any, ev: list) -> None:
+            async def _adapter_sync_db(
+                s: AsyncSession, id_: str, old: Any, new: Any, ev: list
+            ) -> None:
                 await adapter.sync_db(s, id_, old, new, ev)
 
             self._sync_db_handler = _adapter_sync_db
@@ -157,6 +180,17 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             self._sync_db_handler = None
 
     async def process_command(
+        self,
+        id: str,
+        cmd: C,
+    ) -> tuple[StoredState[S], list[E]] | Rejection:
+        with self._tracer.span(
+            "process_command",
+            {"fleuve.workflow_id": id, "fleuve.command_type": type(cmd).__name__},
+        ):
+            return await self._process_command_impl(id, cmd)
+
+    async def _process_command_impl(
         self,
         id: str,
         cmd: C,
@@ -175,6 +209,11 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                 )
 
                 old: StoredState[S] = await self.get_current_state(s, id)
+                lifecycle = getattr(old.state, "lifecycle", "active")
+                if lifecycle == "paused":
+                    return Rejection(msg="Workflow is paused")
+                if lifecycle == "cancelled":
+                    return Rejection(msg="Workflow is cancelled")
                 events = self.model.decide(old.state, cmd)
                 if not events:
                     return old, []
@@ -203,17 +242,19 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                                     "event_type": e.type,
                                     "workflow_type": self._workflow_type,
                                     "body": e,
+                                    "schema_version": self.model.schema_version(),
                                 }
                                 for i, e in enumerate(events, start=1)
                             ]
                         )
                     )
+
+                    new_version = old.version + len(events)
+                    await self._maybe_snapshot(s, id, new_state, new_version)
+
                     await s.commit()
-                    # Success - break out of retry loop
                     break
                 except IntegrityError:
-                    # Handle race condition: workflow state changed between read and write
-                    # Rollback and retry with updated state
                     await s.rollback()
                     continue
 
@@ -235,9 +276,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                     self.db_sub_model.workflow_id == workflow_id
                 )
             )
-            existing = set[
-                tuple[str, str, tuple[str, ...], tuple[str, ...]]
-            ](
+            existing = set[tuple[str, str, tuple[str, ...], tuple[str, ...]]](
                 (
                     i.subscribed_to_workflow,
                     i.subscribed_to_event_type,
@@ -283,7 +322,8 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         external_subs = getattr(new_state, "external_subscriptions", []) or []
         if (old_state is None and external_subs) or (
             old_state
-            and getattr(old_state, "external_subscriptions", []) or [] != external_subs
+            and getattr(old_state, "external_subscriptions", [])
+            or [] != external_subs
         ):
             c = await s.execute(
                 select(self.db_external_sub_model).where(
@@ -311,7 +351,36 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                         )
                     )
 
-    async def create_new(self, cmd: C, id: str, tags: list[str] | None = None) -> StoredState | Rejection:
+    async def _maybe_snapshot(
+        self, s: AsyncSession, workflow_id: str, state: S, version: int
+    ) -> None:
+        """Upsert a snapshot if snapshotting is enabled and version hits the interval."""
+        if (
+            not self._db_snapshot_model
+            or self._snapshot_interval <= 0
+            or version % self._snapshot_interval != 0
+        ):
+            return
+
+        stmt = (
+            pg_insert(self._db_snapshot_model)
+            .values(
+                workflow_id=workflow_id,
+                workflow_type=self._workflow_type,
+                version=version,
+                state=state,
+            )
+            .on_conflict_do_update(
+                index_elements=["workflow_id"],
+                set_={"version": version, "state": state},
+            )
+        )
+        await s.execute(stmt)
+        logger.debug("Snapshot created for %s at version %d", workflow_id, version)
+
+    async def create_new(
+        self, cmd: C, id: str, tags: list[str] | None = None
+    ) -> StoredState | Rejection:
         events = self.model.decide(None, cmd)
         if isinstance(events, Rejection):
             return events
@@ -339,9 +408,9 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
                 # Inject workflow tags into events for fast access
                 for event in events:
-                    if not hasattr(event, 'metadata_'):
+                    if not hasattr(event, "metadata_"):
                         event.metadata_ = {}
-                    event.metadata_['workflow_tags'] = tags
+                    event.metadata_["workflow_tags"] = tags
 
                 await s.execute(
                     insert(self.db_event_model).values(
@@ -352,6 +421,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                                 "event_type": e.type,
                                 "workflow_type": self._workflow_type,
                                 "body": e,
+                                "schema_version": self.model.schema_version(),
                             }
                             for i, e in enumerate(events, start=1)
                         ]
@@ -371,22 +441,200 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         await self._es.put_state(ss)
         return ss
 
+    async def pause_workflow(
+        self, id: str, reason: str = ""
+    ) -> StoredState[S] | Rejection:
+        """Pause a workflow. Blocks further command processing until resumed."""
+        async with self._session_maker() as s:
+            old = await self.get_current_state(s, id)
+            if getattr(old.state, "lifecycle", "active") == "paused":
+                return Rejection(msg="Workflow is already paused")
+            if getattr(old.state, "lifecycle", "active") == "cancelled":
+                return Rejection(msg="Workflow is cancelled")
+
+            ev = EvSystemPause(reason=reason)
+            new_state = old.state.model_copy(update={"lifecycle": "paused"})
+
+            await s.execute(
+                insert(self.db_event_model).values(
+                    {
+                        "workflow_id": id,
+                        "workflow_version": old.version + 1,
+                        "event_type": ev.type,
+                        "workflow_type": self._workflow_type,
+                        "body": ev,
+                        "schema_version": self.model.schema_version(),
+                    }
+                )
+            )
+            new_version = old.version + 1
+            await self._maybe_snapshot(s, id, new_state, new_version)
+            await s.commit()
+
+        new = StoredState(id=id, state=new_state, version=new_version)
+        await self._es.put_state(new)
+        return new
+
+    async def resume_workflow(self, id: str) -> StoredState[S] | Rejection:
+        """Resume a paused workflow."""
+        async with self._session_maker() as s:
+            old = await self.get_current_state(s, id)
+            if getattr(old.state, "lifecycle", "active") != "paused":
+                return Rejection(msg="Workflow is not paused")
+
+            ev = EvSystemResume()
+            new_state = old.state.model_copy(update={"lifecycle": "active"})
+
+            await s.execute(
+                insert(self.db_event_model).values(
+                    {
+                        "workflow_id": id,
+                        "workflow_version": old.version + 1,
+                        "event_type": ev.type,
+                        "workflow_type": self._workflow_type,
+                        "body": ev,
+                        "schema_version": self.model.schema_version(),
+                    }
+                )
+            )
+            new_version = old.version + 1
+            await self._maybe_snapshot(s, id, new_state, new_version)
+            await s.commit()
+
+        new = StoredState(id=id, state=new_state, version=new_version)
+        await self._es.put_state(new)
+        return new
+
+    async def cancel_workflow(
+        self,
+        id: str,
+        reason: str = "",
+        *,
+        action_executor: Any = None,
+    ) -> StoredState[S] | Rejection:
+        """Cancel a workflow. Blocks further command processing."""
+        async with self._session_maker() as s:
+            old = await self.get_current_state(s, id)
+            if getattr(old.state, "lifecycle", "active") == "cancelled":
+                return Rejection(msg="Workflow is already cancelled")
+
+            if action_executor is not None:
+                await action_executor.cancel_workflow_actions(id)
+
+            if self._db_delay_schedule_model is not None:
+                await s.execute(
+                    delete(self._db_delay_schedule_model).where(
+                        self._db_delay_schedule_model.workflow_id == id
+                    )
+                )
+
+            ev = EvSystemCancel(reason=reason)
+            new_state = old.state.model_copy(update={"lifecycle": "cancelled"})
+
+            await s.execute(
+                insert(self.db_event_model).values(
+                    {
+                        "workflow_id": id,
+                        "workflow_version": old.version + 1,
+                        "event_type": ev.type,
+                        "workflow_type": self._workflow_type,
+                        "body": ev,
+                        "schema_version": self.model.schema_version(),
+                    }
+                )
+            )
+            new_version = old.version + 1
+            await self._maybe_snapshot(s, id, new_state, new_version)
+            await s.commit()
+
+        new = StoredState(id=id, state=new_state, version=new_version)
+        await self._es.remove_state(id)
+        return new
+
+    async def replay_workflow(
+        self, id: str, from_version: int
+    ) -> StoredState[S] | None:
+        """Replay events from from_version to HEAD. Updates snapshot and ephemeral cache."""
+        async with self._session_maker() as s:
+            base = await self.load_state(
+                s, id, at_version=from_version - 1 if from_version > 1 else 0
+            )
+            base_state = base.state if base else None
+            base_ver = base.version if base else 0
+
+            use_upcast = hasattr(self.db_event_model, "body_raw")
+            if use_upcast:
+                q = (
+                    select(
+                        self.db_event_model.body_raw,
+                        self.db_event_model.workflow_version,
+                        self.db_event_model.event_type,
+                        self.db_event_model.schema_version,
+                    )
+                    .where(
+                        self.db_event_model.workflow_id == id,
+                        self.db_event_model.workflow_version >= from_version,
+                    )
+                    .order_by(self.db_event_model.workflow_version)
+                )
+            else:
+                q = (
+                    select(
+                        self.db_event_model.body, self.db_event_model.workflow_version
+                    )
+                    .where(
+                        self.db_event_model.workflow_id == id,
+                        self.db_event_model.workflow_version >= from_version,
+                    )
+                    .order_by(self.db_event_model.workflow_version)
+                )
+            c = await s.execute(q)
+            rows = c.fetchall()
+            if not rows:
+                return base
+
+            if use_upcast:
+                body_col = self.db_event_model.__table__.c["body"]
+                pydantic_type = body_col.type._pydantic_type
+                adapter = TypeAdapter(pydantic_type)
+                event_bodies = []
+                for row in rows:
+                    raw = row.body_raw if row.body_raw is not None else {}
+                    if isinstance(raw, str):
+                        raw = json.loads(raw) if raw else {}
+                    schema_ver = getattr(row, "schema_version", 1)
+                    event_type = getattr(row, "event_type", "")
+                    upcasted = self.model.upcast(event_type, schema_ver, raw)
+                    event_bodies.append(adapter.validate_python(upcasted))
+            else:
+                event_bodies = [row.body for row in rows]
+
+            state = self.model.evolve_(base_state, event_bodies)
+            version = rows[-1].workflow_version
+            await self._maybe_snapshot(s, id, state, version)
+            await s.commit()
+
+        new = StoredState(id=id, state=state, version=version)
+        await self._es.put_state(new)
+        return new
+
     async def get_workflow_tags(self, workflow_id: str) -> list[str]:
         """Get tags for a workflow from the metadata table.
-        
+
         Args:
             workflow_id: The workflow ID to get tags for
-            
+
         Returns:
             List of tags, or empty list if no metadata exists
         """
         if not self.db_workflow_metadata_model:
             return []
-        
+
         async with self._session_maker() as s:
             result = await s.scalar(
-                select(self.db_workflow_metadata_model.tags)
-                .where(self.db_workflow_metadata_model.workflow_id == workflow_id)
+                select(self.db_workflow_metadata_model.tags).where(
+                    self.db_workflow_metadata_model.workflow_id == workflow_id
+                )
             )
             return result if result else []
 
@@ -394,24 +642,24 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         self, workflow_id: str, events: list[E]
     ) -> None:
         """Inject workflow tags into event metadata for fast access.
-        
+
         This embeds workflow-level tags into each event's metadata so they're
         available without additional database queries during event processing.
-        
+
         Args:
             workflow_id: The workflow ID
             events: List of events to inject tags into
         """
         if not self.db_workflow_metadata_model:
             return
-        
+
         workflow_tags = await self.get_workflow_tags(workflow_id)
         if workflow_tags:
             for event in events:
-                if not hasattr(event, 'metadata_'):
+                if not hasattr(event, "metadata_"):
                     event.metadata_ = {}
                 # Store workflow tags separately from event tags
-                event.metadata_['workflow_tags'] = workflow_tags
+                event.metadata_["workflow_tags"] = workflow_tags
 
     async def get_current_state(self, s: AsyncSession, id: str) -> StoredState[S]:
         state: StoredState[S] | None = await self._es.get_state(id)
@@ -434,23 +682,92 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     async def load_state(
         self, s: AsyncSession, id: str, at_version: int | None = None
     ) -> StoredState[S] | None:
-        q = (
-            select(self.db_event_model.body, self.db_event_model.workflow_version)
-            .where(self.db_event_model.workflow_id == id)
-            .order_by(self.db_event_model.workflow_version)
-        )
+        with self._tracer.span(
+            "load_state",
+            {"fleuve.workflow_id": id, "fleuve.at_version": at_version or 0},
+        ):
+            return await self._load_state_impl(s, id, at_version)
+
+    async def _load_state_impl(
+        self, s: AsyncSession, id: str, at_version: int | None = None
+    ) -> StoredState[S] | None:
+        base_state: S | None = None
+        base_version = 0
+
+        if self._db_snapshot_model:
+            snap = await s.execute(
+                select(self._db_snapshot_model).where(
+                    self._db_snapshot_model.workflow_id == id
+                )
+            )
+            snap_row = snap.scalar_one_or_none()
+            if snap_row is not None and (
+                at_version is None or snap_row.version <= at_version
+            ):
+                base_state = snap_row.state
+                base_version = snap_row.version
+
+        use_upcast = hasattr(self.db_event_model, "body_raw")
+        if use_upcast:
+            q = (
+                select(
+                    self.db_event_model.body_raw,
+                    self.db_event_model.workflow_version,
+                    self.db_event_model.event_type,
+                    self.db_event_model.schema_version,
+                )
+                .where(
+                    self.db_event_model.workflow_id == id,
+                    self.db_event_model.workflow_version > base_version,
+                )
+                .order_by(self.db_event_model.workflow_version)
+            )
+        else:
+            q = (
+                select(self.db_event_model.body, self.db_event_model.workflow_version)
+                .where(
+                    self.db_event_model.workflow_id == id,
+                    self.db_event_model.workflow_version > base_version,
+                )
+                .order_by(self.db_event_model.workflow_version)
+            )
         if at_version is not None:
             q = q.where(self.db_event_model.workflow_version <= at_version)
 
         c = await s.execute(q)
-        events = c.fetchall()
-        if not events:
+        rows = c.fetchall()
+
+        if not rows and base_state is None:
             return None
-        version = events[-1].workflow_version
-        if self.model.is_final_event(events[-1].body):
-            return None
-    
-        state = self.model.evolve_(None, [e.body for e in events])
+
+        version = rows[-1].workflow_version if rows else base_version
+
+        if use_upcast:
+            body_col = self.db_event_model.__table__.c["body"]
+            pydantic_type = body_col.type._pydantic_type
+            adapter = TypeAdapter(pydantic_type)
+            event_bodies: list[Any] = []
+            for row in rows:
+                raw = row.body_raw if row.body_raw is not None else {}
+                if isinstance(raw, str):
+                    raw = json.loads(raw) if raw else {}
+                elif not isinstance(raw, dict):
+                    raw = {}
+                schema_ver = getattr(row, "schema_version", 1)
+                event_type = getattr(row, "event_type", "")
+                upcasted = self.model.upcast(event_type, schema_ver, raw)
+                event_bodies.append(adapter.validate_python(upcasted))
+        else:
+            event_bodies = [row.body for row in rows]
+
+        if event_bodies:
+            last_body = event_bodies[-1]
+            if not isinstance(last_body, EvSystemCancel) and self.model.is_final_event(
+                last_body
+            ):
+                return None  # Workflow completed (but not cancelled - cancelled needs state for lifecycle checks)
+
+        state = self.model.evolve_(base_state, event_bodies)
         return StoredState(state=state, id=id, version=version)
 
     async def hydrate_state_(self, id: str) -> StoredState[S] | None:
@@ -489,8 +806,6 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             # Republish all events after a certain point
             count = await repo.republish_events(min_event_id=5000)
         """
-        from sqlalchemy import update
-
         async with self._session_maker() as s:
             query = update(self.db_event_model).values(pushed=False)
 
@@ -504,8 +819,5 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             result = await s.execute(query)
             await s.commit()
 
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.info(f"Marked {result.rowcount} events for republishing")
+            logger.info("Marked %d events for republishing", result.rowcount)
             return result.rowcount

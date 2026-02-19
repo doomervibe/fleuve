@@ -33,51 +33,58 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CachedSubscription:
     """Cached subscription data for fast matching.
-    
+
     This avoids database queries for every event by keeping subscriptions in memory.
     """
+
     workflow_id: str  # The subscribing workflow
     subscribed_to_workflow: str  # "*" or specific workflow_id
     subscribed_to_event_type: str  # "*" or specific event type
     tags: list[str]  # ANY match (OR logic)
     tags_all: list[str]  # ALL match (AND logic)
-    
+
     def matches_event(
-        self, 
+        self,
         event_workflow_id: str,
-        event_type: str, 
-        event_tags: set[str], 
-        workflow_tags: set[str]
+        event_type: str,
+        event_tags: set[str],
+        workflow_tags: set[str],
     ) -> bool:
         """Check if this subscription matches the event.
-        
+
         Args:
             event_workflow_id: The workflow ID that emitted the event
             event_type: The type of the event
             event_tags: Tags from the event's metadata
             workflow_tags: Tags from the workflow's metadata
-            
+
         Returns:
             True if this subscription matches the event
         """
         all_tags = event_tags | workflow_tags
-        
+
         # Check workflow_id match
-        if self.subscribed_to_workflow != "*" and self.subscribed_to_workflow != event_workflow_id:
+        if (
+            self.subscribed_to_workflow != "*"
+            and self.subscribed_to_workflow != event_workflow_id
+        ):
             return False
-        
+
         # Check event_type match
-        if self.subscribed_to_event_type != "*" and self.subscribed_to_event_type != event_type:
+        if (
+            self.subscribed_to_event_type != "*"
+            and self.subscribed_to_event_type != event_type
+        ):
             return False
-        
+
         # Check tags (ANY match - OR logic)
         if self.tags and not any(tag in all_tags for tag in self.tags):
             return False
-        
+
         # Check tags_all (ALL match - AND logic)
         if self.tags_all and not all(tag in all_tags for tag in self.tags_all):
             return False
-        
+
         return True
 
 
@@ -241,13 +248,13 @@ class WorkflowsRunner:
 
     async def _load_subscription_cache(self):
         """Load all subscriptions for this workflow type into memory.
-        
+
         This eliminates the need for database queries on every event.
         The cache is kept consistent by updating it whenever subscriptions change
         through process_command() or create_new().
         """
         logger.info(f"Loading subscription cache for {self.workflow_type.name()}...")
-        
+
         async with self.session_maker() as s:
             result = await s.execute(
                 select(
@@ -256,13 +263,12 @@ class WorkflowsRunner:
                     self.db_sub_type.subscribed_to_event_type,
                     self.db_sub_type.tags,
                     self.db_sub_type.tags_all,
-                )
-                .where(self.db_sub_type.workflow_type == self.workflow_type.name())
+                ).where(self.db_sub_type.workflow_type == self.workflow_type.name())
             )
-            
+
             self._subscription_cache.clear()
             count = 0
-            
+
             for row in result.fetchall():
                 subscription = CachedSubscription(
                     workflow_id=row.workflow_id,
@@ -271,13 +277,13 @@ class WorkflowsRunner:
                     tags=row.tags or [],
                     tags_all=row.tags_all or [],
                 )
-                
+
                 # Index by subscribing workflow_id for efficient updates
                 if subscription.workflow_id not in self._subscription_cache:
                     self._subscription_cache[subscription.workflow_id] = []
                 self._subscription_cache[subscription.workflow_id].append(subscription)
                 count += 1
-        
+
         self._cache_initialized = True
         logger.info(
             f"Loaded {count} subscriptions for {len(self._subscription_cache)} workflows "
@@ -311,7 +317,7 @@ class WorkflowsRunner:
             if cmd:
                 # Process commands and update subscription cache
                 workflow_ids = await self.workflows_to_notify(event)
-                
+
                 async def process_and_update_cache(workflow_id: str):
                     """Process command and update cache with new subscriptions."""
                     result = await self.repo.process_command(
@@ -324,7 +330,7 @@ class WorkflowsRunner:
                             workflow_id, stored_state.state.subscriptions
                         )
                     return result
-                
+
                 async with asyncio.TaskGroup() as tg:
                     for id in workflow_ids:
                         tg.create_task(
@@ -396,66 +402,69 @@ class WorkflowsRunner:
 
     async def find_subscriptions(self, event: ConsumedEvent) -> list[str]:
         """Find workflows that should be notified about this event (cached version).
-        
+
         Uses in-memory cache for fast lookups. Falls back to database if cache
         is not initialized.
-        
+
         Workflow tags are read directly from event metadata (injected at creation time)
         for maximum performance - no database queries needed.
         """
         if not self._cache_initialized:
             # Fallback to database if cache not ready (shouldn't happen)
-            logger.warning("Subscription cache not initialized, falling back to DB query")
+            logger.warning(
+                "Subscription cache not initialized, falling back to DB query"
+            )
             return await self._find_subscriptions_from_db(event)
-        
+
         # Get event tags from metadata
-        event_tags = set(event.metadata_.get('tags', [])) if event.metadata_ else set()
-        
+        event_tags = set(event.metadata_.get("tags", [])) if event.metadata_ else set()
+
         # Get workflow tags from event metadata (injected at creation time)
         # This avoids a database query on every event
-        workflow_tags = set(event.metadata_.get('workflow_tags', [])) if event.metadata_ else set()
-        
+        workflow_tags = (
+            set(event.metadata_.get("workflow_tags", [])) if event.metadata_ else set()
+        )
+
         # Match subscriptions from cache
         matched_workflows = set()
-        
+
         # Iterate through all cached subscriptions
         for workflow_id, subscriptions in self._subscription_cache.items():
             for sub in subscriptions:
                 if sub.matches_event(
-                    event.workflow_id,
-                    event.event.type,
-                    event_tags,
-                    workflow_tags
+                    event.workflow_id, event.event.type, event_tags, workflow_tags
                 ):
                     matched_workflows.add(workflow_id)
                     break  # No need to check other subscriptions for this workflow
-        
+
         return list(matched_workflows)
 
     async def _find_subscriptions_from_db(self, event: ConsumedEvent) -> list[str]:
         """Fallback: Find subscriptions from database (original implementation).
-        
+
         This is used when the cache is not initialized or during testing.
         """
         # Get event tags from metadata
-        event_tags = event.metadata_.get('tags', []) if event.metadata_ else []
-        
+        event_tags = event.metadata_.get("tags", []) if event.metadata_ else []
+
         # Get workflow tags from event metadata (should be injected at creation)
         # Fall back to database query only if not present in metadata
-        workflow_tags = event.metadata_.get('workflow_tags', []) if event.metadata_ else []
+        workflow_tags = (
+            event.metadata_.get("workflow_tags", []) if event.metadata_ else []
+        )
         if not workflow_tags:
             workflow_tags = await self.repo.get_workflow_tags(event.workflow_id)
-        
+
         # Combine all available tags
         all_tags = set(event_tags) | set(workflow_tags)
-        
+
         async with self.session_maker() as s:
             # Select subscriptions with their tag filters
             result = await s.execute(
                 select(
                     self.db_sub_type.workflow_id,
                     self.db_sub_type.tags,
-                    self.db_sub_type.tags_all
+                    self.db_sub_type.tags_all,
                 )
                 .where(
                     or_(
@@ -480,7 +489,7 @@ class WorkflowsRunner:
                 )
                 .distinct()
             )
-            
+
             # Filter subscriptions by tag matching logic
             matched_workflows = []
             for workflow_id, sub_tags, sub_tags_all in result:
@@ -489,43 +498,45 @@ class WorkflowsRunner:
                     # If tags specified, check ANY match (OR)
                     if not any(tag in all_tags for tag in sub_tags):
                         continue
-                
+
                 if sub_tags_all:
                     # If tags_all specified, check ALL match (AND)
                     if not all(tag in all_tags for tag in sub_tags_all):
                         continue
-                
+
                 matched_workflows.append(workflow_id)
-            
+
             return matched_workflows
 
     async def _update_subscription_cache(self, workflow_id: str, subscriptions: list):
         """Update cache when subscriptions change for a workflow.
-        
+
         This is called after process_command() or create_new() to keep the cache
         in sync with the database.
-        
+
         Args:
             workflow_id: The workflow whose subscriptions changed
             subscriptions: List of Sub objects from the workflow state
         """
         if not self._cache_initialized:
             return
-        
+
         # Clear old subscriptions for this workflow
         self._subscription_cache.pop(workflow_id, None)
-        
+
         # Add new subscriptions (internal event subs only; external topic subs are in a separate table)
         if subscriptions:
             cached_subs = []
             for sub in subscriptions:
-                cached_subs.append(CachedSubscription(
-                    workflow_id=workflow_id,
-                    subscribed_to_workflow=sub.workflow_id,
-                    subscribed_to_event_type=sub.event_type,
-                    tags=sub.tags,
-                    tags_all=sub.tags_all,
-                ))
+                cached_subs.append(
+                    CachedSubscription(
+                        workflow_id=workflow_id,
+                        subscribed_to_workflow=sub.workflow_id,
+                        subscribed_to_event_type=sub.event_type,
+                        tags=sub.tags,
+                        tags_all=sub.tags_all,
+                    )
+                )
             self._subscription_cache[workflow_id] = cached_subs
             logger.debug(
                 f"Updated subscription cache for workflow {workflow_id}: "

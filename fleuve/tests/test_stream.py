@@ -1,6 +1,7 @@
 """
 Unit tests for les.stream module.
 """
+
 import asyncio
 import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -169,7 +170,7 @@ class TestReader:
         async with reader:
             assert reader._init
             assert reader._bg_checkpoint_marking_job is not None
-        
+
         # Wait a bit for cancellation to propagate
         await asyncio.sleep(0.05)
         # Task should be done (either cancelled or completed) after context exit
@@ -325,6 +326,7 @@ class TestReaderAdvanced:
 
         # Use a shorter sleeper timeout to make test faster
         from fleuve.stream import Sleeper
+
         reader._sleeper = Sleeper(
             min_sleep=datetime.timedelta(milliseconds=10),
             max_sleep=datetime.timedelta(milliseconds=50),
@@ -406,9 +408,7 @@ class TestReaderAdvanced:
         assert len(events) == 3
 
     @pytest.mark.asyncio
-    async def test_iter_until_exhaustion_empty(
-        self, test_session_maker, clean_tables
-    ):
+    async def test_iter_until_exhaustion_empty(self, test_session_maker, clean_tables):
         """Test iter_until_exhaustion stops immediately when no events."""
         from fleuve.tests.models import DbEventModel, TestOffsetModel
 
@@ -461,7 +461,9 @@ class TestReaderAdvanced:
 
         assert len(events) == 2
         # Events should be TestEvent instances with type attribute
-        assert all(hasattr(e.event, 'type') and e.event.type == "test_event" for e in events)
+        assert all(
+            hasattr(e.event, "type") and e.event.type == "test_event" for e in events
+        )
 
     @pytest.mark.asyncio
     async def test_fetch_new_events_respects_offset(
@@ -620,9 +622,7 @@ class TestReaderAdvanced:
         assert reader.last_read_event_g_id_marked_in_db is None
 
     @pytest.mark.asyncio
-    async def test_bg_checkpoint_marking_runs(
-        self, test_session_maker, clean_tables
-    ):
+    async def test_bg_checkpoint_marking_runs(self, test_session_maker, clean_tables):
         """Test _bg_checkpoint_marking runs periodically."""
         from fleuve.tests.models import DbEventModel, TestOffsetModel
 

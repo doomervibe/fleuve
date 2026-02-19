@@ -3,6 +3,7 @@
 These tests verify the JetStreamPublisher and JetStreamConsumer implementations,
 ensuring reliable event publishing from PostgreSQL to NATS JetStream.
 """
+
 import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
@@ -24,7 +25,9 @@ class MockEvent(BaseModel):
 class MockStoredEvent:
     """Mock stored event from database."""
 
-    def __init__(self, global_id, workflow_id, workflow_version, event_type, workflow_type):
+    def __init__(
+        self, global_id, workflow_id, workflow_version, event_type, workflow_type
+    ):
         self.global_id = global_id
         self.workflow_id = workflow_id
         self.workflow_version = workflow_version
@@ -76,14 +79,16 @@ class TestJetStreamPublisher:
     """Tests for JetStreamPublisher (Outbox pattern)."""
 
     @pytest.mark.asyncio
-    async def test_publisher_initialization(self, mock_nats_client, mock_session_maker, mock_event_model):
+    async def test_publisher_initialization(
+        self, mock_nats_client, mock_session_maker, mock_event_model
+    ):
         """Test that publisher initializes JetStream stream correctly."""
         # Mock lock acquisition
         lock_result = Mock()
         lock_result.scalar.return_value = True
         session = mock_session_maker.return_value
         session.execute = AsyncMock(return_value=lock_result)
-        
+
         publisher = JetStreamPublisher(
             nats_client=mock_nats_client,
             session_maker=mock_session_maker,
@@ -99,7 +104,7 @@ class TestJetStreamPublisher:
             call_args = js.add_stream.call_args[0][0]
             assert call_args.name == "test_stream"
             assert "events.test_workflow.*" in call_args.subjects
-            
+
             # Verify lock was acquired
             assert publisher._lock_acquired
 
@@ -111,10 +116,10 @@ class TestJetStreamPublisher:
         # First publisher acquires lock successfully
         lock_result_success = Mock()
         lock_result_success.scalar.return_value = True
-        
+
         session1 = mock_session_maker.return_value
         session1.execute = AsyncMock(return_value=lock_result_success)
-        
+
         publisher1 = JetStreamPublisher(
             nats_client=mock_nats_client,
             session_maker=mock_session_maker,
@@ -122,10 +127,10 @@ class TestJetStreamPublisher:
             stream_name="test_stream",
             workflow_type="test_workflow",
         )
-        
+
         async with publisher1:
             assert publisher1._lock_acquired
-            
+
             # Second publisher tries to acquire lock and fails
             lock_result_fail = Mock()
             lock_result_fail.scalar = Mock(return_value=False)
@@ -153,7 +158,7 @@ class TestJetStreamPublisher:
             with pytest.raises(RuntimeError, match="Could not acquire lock"):
                 async with publisher2:
                     pass
-    
+
     @pytest.mark.asyncio
     async def test_publisher_can_disable_lock(
         self, mock_nats_client, mock_session_maker, mock_event_model
@@ -167,7 +172,7 @@ class TestJetStreamPublisher:
             workflow_type="test_workflow",
             enable_lock=False,  # Disable lock
         )
-        
+
         async with publisher:
             # Should not try to acquire lock
             assert not publisher._lock_acquired

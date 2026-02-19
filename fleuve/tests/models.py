@@ -2,13 +2,20 @@
 SQLAlchemy database models for testing.
 These models are used by test fixtures and are not test classes themselves.
 """
+
 from typing import Union
 
-from sqlalchemy import BigInteger, String
+from sqlalchemy import BigInteger, Computed, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import Mapped, mapped_column
 
-from fleuve.model import EvDelayComplete
+from fleuve.model import (
+    EvDelayComplete,
+    EvSystemCancel,
+    EvSystemPause,
+    EvSystemResume,
+)
 from fleuve.postgres import (
     Activity,
     Base,
@@ -16,6 +23,7 @@ from fleuve.postgres import (
     ExternalSubscription,
     Offset,
     PydanticType,
+    Snapshot,
     StoredEvent,
     Subscription,
 )
@@ -31,12 +39,25 @@ class DbEventModel(StoredEvent):
         # Import here to avoid circular dependency
         from fleuve.tests.conftest import TestCommand, TestEvent
 
-        # Body can be TestEvent (workflow events) or EvDelayComplete (system-emitted)
-        # EvDelayComplete first so it matches when type="delay_complete"
+        # Body can be TestEvent (workflow events), EvDelayComplete (system-emitted),
+        # or EvSystemPause/EvSystemResume/EvSystemCancel (lifecycle)
         return mapped_column(
-            PydanticType(Union[EvDelayComplete[TestCommand], TestEvent]),
+            PydanticType(
+                Union[
+                    EvDelayComplete[TestCommand],
+                    EvSystemPause,
+                    EvSystemResume,
+                    EvSystemCancel,
+                    TestEvent,
+                ]
+            ),
             nullable=False,
         )
+
+    # Raw JSON for upcasting (bypasses Pydantic deserialization)
+    body_raw: Mapped[dict] = mapped_column(
+        JSONB, Computed("body", persisted=True), nullable=True
+    )
 
 
 class TestActivityModel(Activity):
@@ -77,6 +98,21 @@ class TestOffsetModel(Offset):
     """Database model for storing reader offsets"""
 
     __tablename__ = "test_offsets"
+
+
+class TestSnapshotModel(Snapshot):
+    """Database model for storing test workflow snapshots"""
+
+    __tablename__ = "test_snapshots"
+
+    @declared_attr
+    def state(cls) -> Mapped:
+        from fleuve.tests.conftest import TestState
+
+        return mapped_column(
+            PydanticType(TestState),
+            nullable=False,
+        )
 
 
 class WorkflowSyncLogModel(Base):

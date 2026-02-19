@@ -12,6 +12,7 @@ from sqlalchemy import (
     TIMESTAMP,
     BigInteger,
     Boolean,
+    Computed,
     DateTime,
     Dialect,
     Integer,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     TypeDecorator,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, JSONB
 from sqlalchemy.ext.declarative import declarative_base
@@ -120,7 +122,7 @@ class PydanticType(TypeDecorator[ModelT]):
         if value is None:
             return None
         # Return JSON string for JSONB column
-        return self._adapter.dump_json(value).decode('utf-8')
+        return self._adapter.dump_json(value).decode("utf-8")
 
     def process_result_value(self, value: Any, _dialect: Dialect) -> ModelT | None:
         if value is None:
@@ -143,6 +145,9 @@ class StoredEvent(Base):
 
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     workflow_type: Mapped[str] = mapped_column(String, nullable=False)
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
 
     # Abstract property - must be implemented by subclasses
     # Using declared_attr allows proper inheritance and override
@@ -185,6 +190,34 @@ class StoredState(Base):
         )
 
 
+class Snapshot(Base):
+    """Durable state snapshot for a workflow at a specific event version.
+
+    One row per workflow (upserted). Used to avoid replaying all events from
+    the beginning when reconstructing state. Users must create a concrete
+    subclass that implements the abstract ``state`` column with
+    ``PydanticType`` or ``EncryptedPydanticType``.
+    """
+
+    __abstract__ = True
+
+    workflow_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    workflow_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    @declared_attr
+    def state(cls) -> Mapped[BaseModel]:
+        """Abstract state column that must be implemented by subclasses"""
+        raise NotImplementedError(
+            f"Subclass {cls.__name__} must implement the 'state' column "
+            f"with specific database type"
+        )
+
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Offset(Base):
     __abstract__ = True
     reader: Mapped[str] = mapped_column(
@@ -206,9 +239,7 @@ class Subscription(Base):
     subscribed_to_workflow: Mapped[str] = mapped_column(String, primary_key=True)
     subscribed_to_event_type: Mapped[str] = mapped_column(String, primary_key=True)
 
-    tags: Mapped[list[str]] = mapped_column(
-        ARRAY(String), nullable=False, default=list
-    )
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     tags_all: Mapped[list[str]] = mapped_column(
         ARRAY(String), nullable=False, default=list
     )
@@ -229,9 +260,10 @@ class ExternalSubscription(Base):
     topic: Mapped[str] = mapped_column(String(256), primary_key=True)
 
     __table_args__ = (
-        Index("idx_external_subscription_workflow_type_topic", "workflow_type", "topic"),
+        Index(
+            "idx_external_subscription_workflow_type_topic", "workflow_type", "topic"
+        ),
     )
-
 
 
 class RetryPolicy(BaseModel):
@@ -322,9 +354,7 @@ class ScalingOperation(Base):
     workflow_type: Mapped[str] = mapped_column(
         String, nullable=False, primary_key=True, index=True
     )
-    target_offset: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=0
-    )
+    target_offset: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -344,7 +374,7 @@ class ScalingOperation(Base):
 
 class WorkflowMetadata(Base):
     """Table for storing workflow-level metadata including creation-time tags.
-    
+
     Tags stored here are associated with the workflow instance at creation
     and can be used for tag-based event subscriptions.
     """
@@ -353,9 +383,7 @@ class WorkflowMetadata(Base):
 
     workflow_id: Mapped[str] = mapped_column(String(256), primary_key=True)
     workflow_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
-    tags: Mapped[list[str]] = mapped_column(
-        ARRAY(String), nullable=False, default=list
-    )
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

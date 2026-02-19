@@ -1,4 +1,5 @@
 """Pydantic models for Fleuve UI API responses."""
+
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
@@ -6,6 +7,7 @@ from pydantic import BaseModel
 
 class WorkflowSummary(BaseModel):
     """Summary of a workflow for list views."""
+
     workflow_id: str
     workflow_type: str
     version: int
@@ -17,6 +19,7 @@ class WorkflowSummary(BaseModel):
 
 class WorkflowDetail(BaseModel):
     """Detailed workflow information."""
+
     workflow_id: str
     workflow_type: str
     version: int
@@ -29,6 +32,7 @@ class WorkflowDetail(BaseModel):
 
 class EventResponse(BaseModel):
     """Event information."""
+
     global_id: int
     workflow_id: str
     workflow_type: str
@@ -41,6 +45,7 @@ class EventResponse(BaseModel):
 
 class ActivityResponse(BaseModel):
     """Activity (action) information."""
+
     workflow_id: str
     event_number: int
     status: str  # pending, running, completed, failed, retrying
@@ -56,6 +61,7 @@ class ActivityResponse(BaseModel):
 
 class DelayResponse(BaseModel):
     """Delay schedule information."""
+
     workflow_id: str
     workflow_type: str
     delay_until: datetime
@@ -66,6 +72,7 @@ class DelayResponse(BaseModel):
 
 class StatsResponse(BaseModel):
     """Dashboard statistics."""
+
     total_workflows: int
     workflows_by_type: Dict[str, int]
     workflows_by_state: Dict[str, int]
@@ -81,6 +88,7 @@ class StatsResponse(BaseModel):
 
 class WorkflowTypeInfo(BaseModel):
     """Information about a workflow type."""
+
     workflow_type: str
     workflow_count: int
     event_count: int

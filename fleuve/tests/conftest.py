@@ -1,6 +1,7 @@
 """
 Pytest configuration and shared fixtures for les framework tests.
 """
+
 import asyncio
 import datetime
 import os
@@ -47,7 +48,9 @@ TEST_NATS_URL = os.getenv("TEST_NATS_URL", "nats://localhost:4222")
 class TestEvent(EventBase):
     type: str = "test_event"
     value: int = 0
-    metadata_: dict = Field(default_factory=dict)  # optional; repo injects workflow_tags here
+    metadata_: dict = Field(
+        default_factory=dict
+    )  # optional; repo injects workflow_tags here
 
 
 class TestCommand(BaseModel):
@@ -67,7 +70,9 @@ class TestWorkflow(Workflow[TestEvent, TestCommand, TestState, TestEvent]):
         return "test_workflow"
 
     @staticmethod
-    def decide(state: TestState | None, cmd: TestCommand) -> list[TestEvent] | Rejection:
+    def decide(
+        state: TestState | None, cmd: TestCommand
+    ) -> list[TestEvent] | Rejection:
         if cmd.value < 0:
             return Rejection()
         return [TestEvent(value=cmd.value)]
@@ -75,7 +80,9 @@ class TestWorkflow(Workflow[TestEvent, TestCommand, TestState, TestEvent]):
     @staticmethod
     def evolve(state: TestState | None, event: TestEvent) -> TestState:
         if state is None:
-            return TestState(counter=event.value, subscriptions=[], external_subscriptions=[])
+            return TestState(
+                counter=event.value, subscriptions=[], external_subscriptions=[]
+            )
         return TestState(
             counter=state.counter + event.value,
             subscriptions=state.subscriptions,
@@ -103,17 +110,18 @@ async def test_engine() -> AsyncGenerator[AsyncEngine, None]:
     from fleuve.tests.models import (  # noqa: E401
         TestActivityModel,
         TestDelayScheduleModel,
+        TestSnapshotModel,
         DbEventModel,
         TestExternalSubscriptionModel,
         TestOffsetModel,
         TestSubscriptionModel,
         WorkflowSyncLogModel,
     )
-    
+
     # Ensure STORAGE_KEY is set (already set at module level)
     if "STORAGE_KEY" not in os.environ:
         os.environ["STORAGE_KEY"] = TEST_STORAGE_KEY
-    
+
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
 
     # Drop all tables before creating new ones (clean state for each test)
@@ -126,7 +134,7 @@ async def test_engine() -> AsyncGenerator[AsyncEngine, None]:
     # Clean up: drop all tables after test
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
-    
+
     await engine.dispose()
 
 
@@ -158,6 +166,7 @@ async def clean_tables(test_session: AsyncSession):
     from fleuve.tests.models import (
         TestActivityModel,
         TestDelayScheduleModel,
+        TestSnapshotModel,
         DbEventModel,
         TestExternalSubscriptionModel,
         TestOffsetModel,
@@ -173,6 +182,7 @@ async def clean_tables(test_session: AsyncSession):
         TestSubscriptionModel,
         TestExternalSubscriptionModel,
         TestOffsetModel,
+        TestSnapshotModel,
         WorkflowSyncLogModel,
     ]:
         try:
@@ -189,6 +199,7 @@ async def clean_tables(test_session: AsyncSession):
         TestSubscriptionModel,
         TestExternalSubscriptionModel,
         TestOffsetModel,
+        TestSnapshotModel,
         WorkflowSyncLogModel,
     ]:
         try:
@@ -298,6 +309,14 @@ def test_delay_schedule_model() -> type:
     from fleuve.tests.models import TestDelayScheduleModel
 
     return TestDelayScheduleModel
+
+
+@pytest.fixture
+def test_snapshot_model() -> type:
+    """Return the test snapshot model class."""
+    from fleuve.tests.models import TestSnapshotModel
+
+    return TestSnapshotModel
 
 
 @pytest.fixture
