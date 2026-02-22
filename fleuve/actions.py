@@ -118,7 +118,7 @@ class ActionExecutor(Generic[C, Ae]):
             )
             return
 
-        # Check if action is already completed
+        # Check if action is already completed and ensure activity exists before firing
         async with self._session_maker() as s:
             activity = await self._get_activity(s, event.agg_id, event.event_no)
             if activity and activity.status == ActionStatus.COMPLETED:
@@ -126,6 +126,8 @@ class ActionExecutor(Generic[C, Ae]):
                     f"Action for {event.agg_id}:{event.event_no} already completed"
                 )
                 return
+            # Create activity synchronously before firing background task
+            await self._get_or_create_activity(s, event)
 
         # Start action execution in the background (fire-and-forget)
         task = asyncio.create_task(
@@ -263,9 +265,15 @@ class ActionExecutor(Generic[C, Ae]):
         workflow_id = event.agg_id
         event_number = event.event_no
 
-        activity: Ae
+        activity: Ae | None
         async with self._session_maker() as s:
-            activity = await self._get_or_create_activity(s, event)
+            activity = await self._get_activity(s, workflow_id, event_number)
+
+        if activity is None:
+            raise RuntimeError(
+                f"Activity for {workflow_id}:{event_number} not found; "
+                "expected to exist after synchronous create"
+            )
 
         retry_count = 0
         last_exception = None
