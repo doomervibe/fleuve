@@ -1,8 +1,8 @@
 import asyncio
 import datetime
 import logging
-from enum import Enum
 from collections.abc import Awaitable
+from enum import Enum
 from typing import Any, Callable, Generic, Type, TypeVar
 
 from pydantic import BaseModel
@@ -127,17 +127,27 @@ class ActionExecutor(Generic[C, Ae]):
                 )
                 return
 
-        # Start action execution
+        # Start action execution in the background (fire-and-forget)
         task = asyncio.create_task(
             self._run_action_with_retry(event),
             name=f"action-{event.agg_id}-{event.event_no}",
         )
         self._running_actions[action_key] = task
 
-        try:
-            await task
-        finally:
+        # Set up callback to remove task from running actions when it completes
+        def _on_task_done(t: asyncio.Task) -> None:
             self._running_actions.pop(action_key, None)
+            # Log any exceptions that weren't handled
+            try:
+                t.result()
+            except asyncio.CancelledError:
+                pass  # Expected during shutdown
+            except Exception as e:
+                logger.exception(
+                    f"Unhandled exception in action task for {event.agg_id}:{event.event_no}: {e}"
+                )
+
+        task.add_done_callback(_on_task_done)
 
     async def cancel_workflow_actions(
         self, workflow_id: str, event_numbers: list[int] | None = None
