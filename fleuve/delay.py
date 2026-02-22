@@ -112,9 +112,7 @@ class DelayScheduler(Generic[C, Se, Ds]):
     async def _check_and_resume(self):
         """Check for workflows that should resume and emit EvDelayComplete events."""
         now = datetime.datetime.now(datetime.timezone.utc)
-
         async with self._session_maker() as s:
-            # Find all workflows that should resume
             result = await s.execute(
                 select(self._db_delay_schedule_model)
                 .where(
@@ -122,14 +120,13 @@ class DelayScheduler(Generic[C, Se, Ds]):
                 )
                 .where(self._db_delay_schedule_model.delay_until <= now)
             )
-            schedules = result.fetchall()
-
+            schedules = result.scalars().all()
             for schedule in schedules:
                 try:
                     await self._resume_workflow(s, schedule)
                 except Exception as e:
                     logger.exception(
-                        f"Error resuming workflow {schedule.workflow_id}: {e}"
+                        "Error resuming workflow %s: %s", schedule.workflow_id, e
                     )
 
     async def _resume_workflow(self, s: AsyncSession, schedule: Ds):
