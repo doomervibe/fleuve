@@ -19,7 +19,7 @@ async def discover_workflow_types(
     Returns:
         List of workflow type names
     """
-    result = await session.execute(select(distinct(event_model.workflow_type)))
+    result = await session.execute(select(event_model.workflow_type).distinct())
     return [row[0] for row in result.fetchall() if row[0]]
 
 

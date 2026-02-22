@@ -6,14 +6,22 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 import uvicorn
+
+# Load .env from project root or fleuve_ui directory
+_project_root = Path(__file__).resolve().parent.parent
+load_dotenv(_project_root / ".env")
+load_dotenv(Path(__file__).resolve().parent / ".env")
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 # Add the project root to the path so we can import fleuve modules
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from fleuve.postgres import StoredEvent, Activity, DelaySchedule, Subscription
+from fleuve.postgres import Base
+from fleuve_ui.db_models import StoredEvent, Activity, DelaySchedule, Subscription
 from fleuve_ui.backend.api import create_app
 
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +39,10 @@ async def create_session_maker():
         echo=False,
         pool_pre_ping=True,
     )
+
+    # Create tables if they don't exist (standalone mode)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
     return async_sessionmaker(
         engine,

@@ -159,7 +159,7 @@ class FleuveUIBackend:
             """List workflows with optional filtering."""
             async with self.session_maker() as s:
                 # Build query for distinct workflow IDs
-                query = select(distinct(self.event_model.workflow_id))
+                query = select(self.event_model.workflow_id).distinct()
 
                 if workflow_type:
                     query = query.where(self.event_model.workflow_type == workflow_type)
@@ -579,6 +579,7 @@ class FleuveUIBackend:
         @self.app.get("/api/activities", response_model=List[ActivityResponse])
         async def list_activities(
             workflow_id: Optional[str] = Query(None),
+            workflow_type: Optional[str] = Query(None),
             status: Optional[str] = Query(None),
             limit: int = Query(100, ge=1, le=1000),
             offset: int = Query(0, ge=0),
@@ -589,6 +590,8 @@ class FleuveUIBackend:
 
                 if workflow_id:
                     query = query.where(self.activity_model.workflow_id == workflow_id)
+                if workflow_type:
+                    query = query.where(self.activity_model.workflow_type == workflow_type)
                 if status:
                     query = query.where(self.activity_model.status == status)
 
@@ -611,6 +614,7 @@ class FleuveUIBackend:
                     activities.append(
                         ActivityResponse(
                             workflow_id=activity.workflow_id,
+                            workflow_type=getattr(activity, "workflow_type", ""),
                             event_number=activity.event_number,
                             status=activity.status,
                             started_at=activity.started_at,
@@ -861,6 +865,13 @@ class FleuveUIBackend:
                     total_delays=total_delays,
                     active_delays=active_delays,
                 )
+
+        @self.app.get("/api/runners")
+        async def get_runners(
+            workflow_type: Optional[str] = Query(None),
+        ):
+            """List runners. Python fleuve does not have runners - returns empty."""
+            return {"runners": [], "total": 0}
 
         # Catch-all route for React Router (must be last)
         @self.app.get("/{full_path:path}")

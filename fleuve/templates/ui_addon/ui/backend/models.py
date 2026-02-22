@@ -47,6 +47,7 @@ class ActivityResponse(BaseModel):
     """Activity (action) information."""
 
     workflow_id: str
+    workflow_type: str = ""
     event_number: int
     status: str  # pending, running, completed, failed, retrying
     started_at: datetime

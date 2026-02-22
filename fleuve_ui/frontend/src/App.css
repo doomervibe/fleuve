@@ -1,0 +1,367 @@
+/* fleuve-go style: zsh terminal look — black + white + accent colors, no grey, no borders */
+:root {
+  --bg: #000000;
+  --bg-hover: rgba(78, 201, 176, 0.06);
+  --fg: #e5e5e5;
+  --muted: rgba(229, 229, 229, 0.6);
+  /* zsh-style accents */
+  --green: #4ec9b0;
+  --blue: #5eb3f6;
+  --red: #f14c4c;
+  --yellow: #dcdcaa;
+  --cyan: #9cdcfe;
+  --font: Menlo, Monaco, 'Courier New', Consolas, monospace;
+}
+
+.logo,
+.nav button,
+.header-right .status,
+.dashboard-header h2,
+.list-header h2,
+.filter-select,
+.refresh-btn,
+.back-btn,
+.stat-label,
+.workflow-card-footer,
+.tabs button,
+.empty-state,
+.empty-state .hint,
+.empty-state pre,
+.loading,
+.error,
+.error button,
+details summary,
+.data-table th {
+  text-transform: lowercase;
+}
+
+/* Header — prompt line */
+.header {
+  background: var(--bg);
+  padding: 0.5rem 1rem;
+}
+
+.header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.logo {
+  font-size: 13px;
+  font-weight: 400;
+  margin: 0;
+  color: var(--fg);
+}
+
+.logo::before {
+  content: '% ';
+  color: var(--green);
+  margin-right: 0;
+}
+
+.nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nav button,
+.nav a {
+  background: none;
+  color: var(--muted);
+  padding: 0.2rem 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font);
+  border: none;
+  outline: none;
+  text-decoration: none;
+}
+
+.nav button:hover,
+.nav a:hover {
+  color: var(--fg);
+}
+
+.nav button.active,
+.nav a.active {
+  color: var(--green);
+}
+
+.header-right .status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status-dot {
+  width: 4px;
+  height: 4px;
+  background: var(--muted);
+}
+
+.status.healthy .status-dot {
+  background: var(--green);
+}
+
+.status.healthy {
+  color: var(--green);
+}
+
+/* Main */
+.main-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+/* Loading / error */
+.loading,
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.spinner {
+  width: 8px;
+  height: 8px;
+  background: var(--green);
+  margin-bottom: 0.5rem;
+  animation: pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+.error {
+  color: var(--red);
+}
+
+.error button {
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  border: none;
+  outline: none;
+}
+
+/* Section headers */
+.dashboard-header,
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.dashboard-header h2,
+.list-header h2 {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.dashboard-header h2::before,
+.list-header h2::before {
+  content: '% ';
+  color: var(--green);
+  margin-right: 0.35rem;
+}
+
+/* Search / filter inputs */
+.search-input,
+.filter-select,
+.search-btn,
+.refresh-btn {
+  padding: 0.25rem 0.5rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 12px;
+  border: none;
+  outline: none;
+}
+
+.search-input::placeholder {
+  color: var(--muted);
+}
+
+.back-btn {
+  padding: 0.25rem 0.5rem;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  border: none;
+  outline: none;
+  text-decoration: none;
+  display: inline-block;
+}
+.back-btn:hover {
+  color: var(--cyan);
+  text-decoration: underline;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.tabs button {
+  padding: 0.35rem 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  border: none;
+  outline: none;
+}
+.tabs button:hover {
+  color: var(--fg);
+}
+.tabs button.active {
+  color: var(--green);
+}
+
+/* Workflow cards */
+.workflow-card:hover {
+  background: var(--bg-hover);
+}
+
+/* Tables */
+.data-table th {
+  color: var(--muted);
+  font-weight: 400;
+  padding: 0.4rem 0.75rem 0.4rem 0;
+  text-align: left;
+  font-size: 11px;
+}
+
+.data-table td {
+  padding: 0.4rem 0.75rem 0.4rem 0;
+  color: var(--fg);
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.empty-state {
+  color: var(--muted);
+}
+
+/* Status badges — terminal-style colors */
+.status-badge {
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+}
+.status-badge.pending { color: var(--yellow); }
+.status-badge.in_progress,
+.status-badge.running { color: var(--blue); }
+.status-badge.completed { color: var(--green); }
+.status-badge.failed { color: var(--red); }
+.status-badge.retrying { color: var(--yellow); }
+
+/* Runners list */
+.lag-badge.lag-healthy,
+.status-indicator.lag-healthy { color: var(--green); }
+.lag-badge.lag-warning,
+.status-indicator.lag-warning { color: var(--yellow); }
+.lag-badge.lag-critical,
+.status-indicator.lag-critical { color: var(--red); }
+.partition-badge {
+  font-size: 0.8em;
+  padding: 0.1rem 0.3rem;
+}
+.partition-badge.single {
+  color: var(--muted);
+}
+.error .hint {
+  margin-top: 0.25rem;
+  font-size: 12px;
+  color: var(--muted);
+}
+.app {
+  min-height: 100vh;
+}
+
+/* Timeline / delay items */
+.timeline-item,
+.delay-item {
+  padding: 0.5rem 0;
+}
+
+/* Links */
+a {
+  color: var(--blue);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* JSON / code view */
+.json-view {
+  background: var(--bg);
+  padding: 0.5rem 0;
+  overflow-x: auto;
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+/* Tags */
+.tags-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.tag-badge {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  font-size: 10px;
+  background: var(--bg);
+  color: var(--cyan);
+  border-radius: 3px;
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+}
+.tag-badge:hover {
+  background: var(--cyan);
+  color: var(--bg);
+}
+.no-tags {
+  color: var(--muted);
+  font-size: 11px;
+}
