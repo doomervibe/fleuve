@@ -16,11 +16,11 @@ export default function FilterBar({ filters, onFilterChange }) {
   };
 
   return (
-    <div className="p-2 mb-1">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+    <div className="filter-bar">
+      <div className="filter-bar-grid">
         {filters && Object.keys(filters).map((key) => (
-          <div key={key}>
-            <label className="block text-xs font-mono mb-0 stat-label">
+          <div key={key} className="filter-bar-field">
+            <label className="stat-label">
               {key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, '_')}:
             </label>
             <input
@@ -28,14 +28,14 @@ export default function FilterBar({ filters, onFilterChange }) {
               value={localFilters[key] || ''}
               onChange={(e) => handleChange(key, e.target.value)}
               placeholder={`filter by ${key}`}
-              className="w-full px-2 py-1 search-input text-xs font-mono"
+              className="search-input"
             />
           </div>
         ))}
-        <div className="flex items-end">
+        <div className="filter-bar-actions">
           <button
             onClick={handleClear}
-            className="px-2 py-1 refresh-btn text-xs font-mono"
+            className="refresh-btn"
           >
             clear
           </button>

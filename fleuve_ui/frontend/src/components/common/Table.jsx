@@ -1,21 +1,30 @@
-export default function Table({ columns, data, onRowClick, emptyMessage = 'no data available' }) {
+import { useResizableTableColumns } from '../../hooks/useResizableTableColumns';
+
+export default function Table({ columns, data, onRowClick, emptyMessage = 'no data available', storageKey = 'fleuve-table' }) {
+  const colConfig = columns.map((c) => ({
+    key: c.key,
+    label: c.label,
+    defaultWidth: c.defaultWidth ?? 120,
+  }));
+  const { TableHead } = useResizableTableColumns(storageKey, colConfig);
+
   if (data.length === 0) {
     return (
-      <div className="text-center py-4 empty-state text-xs font-mono">
+      <div className="empty-state table-empty">
         {emptyMessage}
       </div>
     );
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full font-mono text-xs data-table">
+    <div className="table-container">
+      <table className="data-table table-component">
         <thead>
           <tr>
-            {columns.map((col) => (
-              <th key={col.key} className="px-2 py-1 text-left text-xs font-mono">
+            {columns.map((col, i) => (
+              <TableHead key={col.key} columnKey={col.key} isLast={i === columns.length - 1}>
                 {col.label}
-              </th>
+              </TableHead>
             ))}
           </tr>
         </thead>
@@ -24,13 +33,17 @@ export default function Table({ columns, data, onRowClick, emptyMessage = 'no da
             <tr
               key={idx}
               onClick={() => onRowClick && onRowClick(row)}
-              className={onRowClick ? 'cursor-pointer workflow-card' : ''}
+              className={onRowClick ? 'clickable-row workflow-card' : ''}
             >
-              {columns.map((col) => (
-                <td key={col.key} className="px-2 py-1 whitespace-nowrap text-xs">
-                  {col.render ? col.render(row) : row[col.key]}
-                </td>
-              ))}
+              {columns.map((col) => {
+                const value = col.render ? col.render(row) : row[col.key];
+                const titleStr = col.title ? col.title(row) : (row[col.key] != null ? String(row[col.key]) : null);
+                return (
+                  <td key={col.key} className="cell-truncate" title={titleStr}>
+                    {value}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>

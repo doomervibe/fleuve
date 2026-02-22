@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react';
+import ColoredBadge from './common/ColoredBadge';
+import CopyButton from './common/CopyButton';
+import { SkeletonRow } from './common/Skeleton';
 import { api } from '../api/client';
+import RefreshButton from './common/RefreshButton';
+import { useResizableTableColumns } from '../hooks/useResizableTableColumns';
+import { formatDate } from '../utils/format';
 
 export default function RunnersList() {
   const [runners, setRunners] = useState([]);
@@ -37,10 +43,6 @@ export default function RunnersList() {
     }
   }
 
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleString();
-  };
-
   const getLagClass = (lag) => {
     if (lag < 10) return 'lag-healthy';
     if (lag < 100) return 'lag-warning';
@@ -53,12 +55,32 @@ export default function RunnersList() {
     return 'falling behind';
   };
 
+  const runnerColumns = [
+    { key: 'readerName', label: 'reader name', defaultWidth: 140 },
+    { key: 'workflowType', label: 'workflow type', defaultWidth: 120 },
+    { key: 'partition', label: 'partition', defaultWidth: 70 },
+    { key: 'lastEvent', label: 'last event', defaultWidth: 80 },
+    { key: 'maxEvent', label: 'max event', defaultWidth: 80 },
+    { key: 'lag', label: 'lag', defaultWidth: 60 },
+    { key: 'status', label: 'status', defaultWidth: 90 },
+    { key: 'updated', label: 'updated', defaultWidth: 140 },
+  ];
+  const { TableHead } = useResizableTableColumns('fleuve-runners-table', runnerColumns);
+
   if (loading) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>loading runners...</p>
-      </div>
+      <>
+        <div className="list-header">
+          <h2>runners</h2>
+        </div>
+        <div className="table-container">
+          <div className="skeleton-table">
+            {Array.from({ length: 8 }, (_, i) => (
+              <SkeletonRow key={i} cols={8} />
+            ))}
+          </div>
+        </div>
+      </>
     );
   }
 
@@ -88,17 +110,15 @@ export default function RunnersList() {
               </option>
             ))}
           </select>
-          <button onClick={loadRunners} className="refresh-btn">
-            refresh
-          </button>
+          <RefreshButton onRefresh={loadRunners} />
         </div>
       </div>
 
       {runners.length === 0 ? (
         <div className="empty-state">
-          <p>No runners found</p>
+          <p>no runners found</p>
           <p className="hint">
-            Runners will appear here once they start processing events
+            runners will appear here once they start processing events
           </p>
         </div>
       ) : (
@@ -106,21 +126,32 @@ export default function RunnersList() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>reader name</th>
-                <th>workflow type</th>
-                <th>partition</th>
-                <th>last event</th>
-                <th>max event</th>
-                <th>lag</th>
-                <th>status</th>
-                <th>updated</th>
+                <TableHead columnKey="readerName" isLast={false}>reader name</TableHead>
+                <TableHead columnKey="workflowType" isLast={false}>workflow type</TableHead>
+                <TableHead columnKey="partition" isLast={false}>partition</TableHead>
+                <TableHead columnKey="lastEvent" isLast={false}>last event</TableHead>
+                <TableHead columnKey="maxEvent" isLast={false}>max event</TableHead>
+                <TableHead columnKey="lag" isLast={false}>lag</TableHead>
+                <TableHead columnKey="status" isLast={false}>status</TableHead>
+                <TableHead columnKey="updated" isLast={true}>updated</TableHead>
               </tr>
             </thead>
             <tbody>
               {runners.map((runner) => (
                 <tr key={runner.reader_name + '-' + (runner.partition_id ?? 'single')}>
-                  <td>{runner.reader_name}</td>
-                  <td>{runner.workflow_type}</td>
+                  <td className="cell-truncate" title={runner.reader_name}>
+                    <span className="id-with-copy">
+                      {runner.reader_name}
+                      <CopyButton
+                        text={runner.reader_name + (runner.partition_id != null ? `-P${runner.partition_id}` : '')}
+                        compact
+                        title="copy runner id"
+                      />
+                    </span>
+                  </td>
+                  <td className="cell-truncate" title={runner.workflow_type}>
+                    <ColoredBadge value={runner.workflow_type} />
+                  </td>
                   <td>
                     {runner.partition_id !== undefined &&
                     runner.partition_id !== null ? (
@@ -143,7 +174,7 @@ export default function RunnersList() {
                       {getLagLabel(runner.lag ?? 0)}
                     </span>
                   </td>
-                  <td>{formatDate(runner.updated_at)}</td>
+                  <td className="cell-truncate" title={formatDate(runner.updated_at)}>{formatDate(runner.updated_at)}</td>
                 </tr>
               ))}
             </tbody>

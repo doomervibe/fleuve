@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { Routes, Route, useNavigate } from 'react-router-dom';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import './App.css';
 import Dashboard from './components/Dashboard';
 import WorkflowDetail from './components/WorkflowDetail';
@@ -9,11 +11,9 @@ import RunnersList from './components/RunnersList';
 import Header from './components/Header';
 import { api } from './api/client';
 
-const VIEWS = ['dashboard', 'workflow', 'events', 'activities', 'delays', 'runners'];
-
 function App() {
-  const [view, setView] = useState('dashboard');
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState(null);
+  const navigate = useNavigate();
+  useKeyboardShortcuts();
   const [isHealthy, setIsHealthy] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -35,13 +35,11 @@ function App() {
   }
 
   const handleViewWorkflow = (workflowId) => {
-    setSelectedWorkflowId(workflowId);
-    setView('workflow');
+    navigate(`/workflows/${workflowId}`);
   };
 
   const handleBackToDashboard = () => {
-    setSelectedWorkflowId(null);
-    setView('dashboard');
+    navigate('/');
   };
 
   if (loading) {
@@ -70,27 +68,16 @@ function App() {
 
   return (
     <div className="app">
-      <Header currentView={view} onNavigate={setView} isHealthy={isHealthy} />
+      <Header isHealthy={isHealthy} />
       <main className="main-content">
-        {view === 'dashboard' && (
-          <Dashboard onViewWorkflow={handleViewWorkflow} />
-        )}
-        {view === 'workflow' && selectedWorkflowId && (
-          <WorkflowDetail
-            workflowId={selectedWorkflowId}
-            onBack={handleBackToDashboard}
-          />
-        )}
-        {view === 'events' && (
-          <EventsList onViewWorkflow={handleViewWorkflow} />
-        )}
-        {view === 'activities' && (
-          <ActivitiesList onViewWorkflow={handleViewWorkflow} />
-        )}
-        {view === 'delays' && (
-          <DelaysList onViewWorkflow={handleViewWorkflow} />
-        )}
-        {view === 'runners' && <RunnersList />}
+        <Routes>
+          <Route path="/" element={<Dashboard onViewWorkflow={handleViewWorkflow} />} />
+          <Route path="/workflows/:id" element={<WorkflowDetail onBack={handleBackToDashboard} />} />
+          <Route path="/events" element={<EventsList onViewWorkflow={handleViewWorkflow} />} />
+          <Route path="/activities" element={<ActivitiesList onViewWorkflow={handleViewWorkflow} />} />
+          <Route path="/delays" element={<DelaysList onViewWorkflow={handleViewWorkflow} />} />
+          <Route path="/runners" element={<RunnersList />} />
+        </Routes>
       </main>
     </div>
   );

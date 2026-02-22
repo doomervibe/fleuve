@@ -109,6 +109,7 @@ class SideEffects:
         repo: AsyncRepo,
         action_executor_kwargs: dict[str, Any] = {},
         delay_scheduler_kwargs: dict[str, Any] = {},
+        runner_name: str | None = None,
     ) -> "SideEffects":
         # Merge delay_scheduler_kwargs with required parameters
         delay_kwargs = {
@@ -125,6 +126,7 @@ class SideEffects:
                 db_activity_model=db_activity_model,
                 db_event_model=db_event_model,
                 repo=repo,
+                runner_name=runner_name,
                 **action_executor_kwargs,
             ),
             delay_scheduler=DelayScheduler(

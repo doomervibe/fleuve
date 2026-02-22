@@ -1,8 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import JsonHighlight from './common/JsonHighlight';
+import CopyButton from './common/CopyButton';
+import RefreshButton from './common/RefreshButton';
+import { SkeletonRow } from './common/Skeleton';
+import PaginationBar from './common/PaginationBar';
+import ColoredBadge from './common/ColoredBadge';
+import { useResizableTableColumns } from '../hooks/useResizableTableColumns';
+import { formatDate } from '../utils/format';
+import { colorFor } from '../utils/colors';
+
+const PAGE_SIZE = 50;
 
 export default function EventsList({ onViewWorkflow }) {
   const [events, setEvents] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [expandedEventId, setExpandedEventId] = useState(null);
@@ -12,24 +25,25 @@ export default function EventsList({ onViewWorkflow }) {
   const [availableTags, setAvailableTags] = useState([]);
 
   useEffect(() => {
+    setOffset(0);
+    setExpandedEventId(null);
+  }, [eventTypeFilter, tagFilter]);
+
+  useEffect(() => {
     loadEvents();
     const interval = setInterval(loadEvents, 5000);
     return () => clearInterval(interval);
-  }, [eventTypeFilter, tagFilter]);
+  }, [eventTypeFilter, tagFilter, offset]);
 
   async function loadEvents() {
     try {
-      const params = { limit: 100 };
+      const params = { limit: PAGE_SIZE, offset };
       if (eventTypeFilter) params.event_type = eventTypeFilter;
+      if (tagFilter) params.tag = tagFilter;
       const data = await api.events.list(params);
-      let events = data.events || [];
-      if (tagFilter) {
-        events = events.filter((e) => {
-          const tags = e.metadata?.tags || e.metadata?.workflow_tags || e.tags || [];
-          return tags.includes(tagFilter);
-        });
-      }
+      const events = data.events || [];
       setEvents(events);
+      setTotal(data.total ?? events.length);
       if (data.event_types) setAvailableEventTypes(data.event_types);
       const allTags = [
         ...new Set(
@@ -47,22 +61,37 @@ export default function EventsList({ onViewWorkflow }) {
     }
   }
 
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleString();
-  };
-
   const toggleExpanded = (eventId) => {
     setExpandedEventId((id) => (id === eventId ? null : eventId));
   };
 
   const getEventId = (e) => e.global_id ?? e.id ?? e.workflow_id + '-' + e.workflow_version;
 
+  const eventColumns = [
+    { key: 'id', label: 'id', defaultWidth: 140 },
+    { key: 'workflow', label: 'workflow', defaultWidth: 140 },
+    { key: 'type', label: 'type', defaultWidth: 100 },
+    { key: 'eventNum', label: 'event #', defaultWidth: 60 },
+    { key: 'eventType', label: 'event type', defaultWidth: 100 },
+    { key: 'tags', label: 'tags', defaultWidth: 120 },
+    { key: 'created', label: 'created', defaultWidth: 140 },
+  ];
+  const { TableHead } = useResizableTableColumns('fleuve-events-table', eventColumns);
+
   if (loading) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>loading events...</p>
-      </div>
+      <>
+        <div className="list-header">
+          <h2>recent events</h2>
+        </div>
+        <div className="table-container">
+          <div className="skeleton-table">
+            {Array.from({ length: 10 }, (_, i) => (
+              <SkeletonRow key={i} cols={7} />
+            ))}
+          </div>
+        </div>
+      </>
     );
   }
 
@@ -104,9 +133,7 @@ export default function EventsList({ onViewWorkflow }) {
               </option>
             ))}
           </select>
-          <button onClick={loadEvents} className="refresh-btn">
-            refresh
-          </button>
+          <RefreshButton onRefresh={loadEvents} />
         </div>
       </div>
 
@@ -115,17 +142,18 @@ export default function EventsList({ onViewWorkflow }) {
           <p>no events found</p>
         </div>
       ) : (
+        <>
         <div className="table-container">
           <table className="data-table">
             <thead>
               <tr>
-                <th>id</th>
-                <th>workflow</th>
-                <th>type</th>
-                <th>event #</th>
-                <th>event type</th>
-                <th>tags</th>
-                <th>created</th>
+                <TableHead columnKey="id" isLast={false}>id</TableHead>
+                <TableHead columnKey="workflow" isLast={false}>workflow</TableHead>
+                <TableHead columnKey="type" isLast={false}>type</TableHead>
+                <TableHead columnKey="eventNum" isLast={false}>event #</TableHead>
+                <TableHead columnKey="eventType" isLast={false}>event type</TableHead>
+                <TableHead columnKey="tags" isLast={false}>tags</TableHead>
+                <TableHead columnKey="created" isLast={true}>created</TableHead>
               </tr>
             </thead>
             <tbody>
@@ -139,8 +167,8 @@ export default function EventsList({ onViewWorkflow }) {
                       onClick={() => toggleExpanded(eventId)}
                       className={expandedEventId === eventId ? 'expanded' : ''}
                     >
-                      <td>{eventId}</td>
-                      <td>
+                      <td className="cell-truncate" title={eventId}>{eventId}</td>
+                      <td className="cell-truncate" title={event.workflow_id}>
                         {onViewWorkflow ? (
                           <button
                             className="event-workflow-link"
@@ -155,15 +183,20 @@ export default function EventsList({ onViewWorkflow }) {
                           event.workflow_id
                         )}
                       </td>
-                      <td>{event.workflow_type}</td>
+                      <td className="cell-truncate" title={event.workflow_type}>
+                        <ColoredBadge value={event.workflow_type} />
+                      </td>
                       <td>{event.workflow_version ?? event.event_number ?? '—'}</td>
-                      <td>{event.body?.type ?? event.event_type ?? 'N/A'}</td>
-                      <td className="tags-cell">
+                      <td className="cell-truncate" title={event.body?.type ?? event.event_type ?? 'N/A'}>
+                        <ColoredBadge value={event.body?.type ?? event.event_type ?? 'N/A'} />
+                      </td>
+                      <td className="tags-cell" title={tags.length > 0 ? tags.join(', ') : undefined}>
                         {tags.length > 0 ? (
                           tags.map((tag) => (
                             <button
                               key={tag}
                               className="tag-badge"
+                              style={colorFor(tag) ? { '--badge-color': colorFor(tag) } : undefined}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setTagFilter(tag);
@@ -176,15 +209,16 @@ export default function EventsList({ onViewWorkflow }) {
                           <span className="no-tags">—</span>
                         )}
                       </td>
-                      <td>{formatDate(event.at ?? event.created_at)}</td>
+                      <td className="cell-truncate" title={formatDate(event.at ?? event.created_at)}>{formatDate(event.at ?? event.created_at)}</td>
                     </tr>
                     {expandedEventId === eventId && (
                       <tr key={eventId + '-detail'} className="event-detail-row">
                         <td colSpan={7}>
                           <div className="event-detail-cell">
-                            <pre className="event-body-json">
-                              {JSON.stringify(event.body || event, null, 2)}
-                            </pre>
+                            <div className="event-detail-actions">
+                              <CopyButton text={eventId} title="copy event id" />
+                            </div>
+                            <JsonHighlight data={event.body || event} className="event-body-json" copyable />
                           </div>
                         </td>
                       </tr>
@@ -195,6 +229,13 @@ export default function EventsList({ onViewWorkflow }) {
             </tbody>
           </table>
         </div>
+        <PaginationBar
+          offset={offset}
+          limit={PAGE_SIZE}
+          total={total}
+          onPageChange={setOffset}
+        />
+        </>
       )}
     </>
   );

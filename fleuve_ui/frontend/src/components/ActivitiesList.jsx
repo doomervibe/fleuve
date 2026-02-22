@@ -1,25 +1,42 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import RefreshButton from './common/RefreshButton';
+import PaginationBar from './common/PaginationBar';
+import ActivitiesTimeline from './ActivitiesTimeline';
+import ColoredBadge from './common/ColoredBadge';
+import CopyButton from './common/CopyButton';
+import { SkeletonRow } from './common/Skeleton';
+import { useResizableTableColumns } from '../hooks/useResizableTableColumns';
+import { formatDate } from '../utils/format';
+
+const PAGE_SIZE = 50;
 
 export default function ActivitiesList({ onViewWorkflow }) {
   const [activities, setActivities] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
+  const [viewMode, setViewMode] = useState('table'); // 'table' | 'timeline'
+
+  useEffect(() => {
+    setOffset(0);
+  }, [statusFilter]);
 
   useEffect(() => {
     loadActivities();
     const interval = setInterval(loadActivities, 5000);
     return () => clearInterval(interval);
-  }, [statusFilter]);
+  }, [statusFilter, offset]);
 
   async function loadActivities() {
     try {
-      const params = statusFilter
-        ? { status: statusFilter, limit: 50 }
-        : { limit: 50 };
+      const params = { limit: PAGE_SIZE, offset };
+      if (statusFilter) params.status = statusFilter;
       const data = await api.activities.list(params);
       setActivities(data.activities || []);
+      setTotal(data.total ?? data.activities?.length ?? 0);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load activities');
@@ -28,16 +45,32 @@ export default function ActivitiesList({ onViewWorkflow }) {
     }
   }
 
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleString();
-  };
+  const activityColumns = [
+    { key: 'id', label: 'id', defaultWidth: 140 },
+    { key: 'workflow', label: 'workflow', defaultWidth: 140 },
+    { key: 'type', label: 'type', defaultWidth: 100 },
+    { key: 'eventNum', label: 'event #', defaultWidth: 60 },
+    { key: 'status', label: 'status', defaultWidth: 80 },
+    { key: 'runner', label: 'runner', defaultWidth: 120 },
+    { key: 'retries', label: 'retries', defaultWidth: 60 },
+    { key: 'updated', label: 'updated', defaultWidth: 140 },
+  ];
+  const { TableHead } = useResizableTableColumns('fleuve-activities-table', activityColumns);
 
   if (loading) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>loading activities...</p>
-      </div>
+      <>
+        <div className="list-header">
+          <h2>activities</h2>
+        </div>
+        <div className="table-container">
+          <div className="skeleton-table">
+            {Array.from({ length: 10 }, (_, i) => (
+              <SkeletonRow key={i} cols={8} />
+            ))}
+          </div>
+        </div>
+      </>
     );
   }
 
@@ -55,6 +88,20 @@ export default function ActivitiesList({ onViewWorkflow }) {
       <div className="list-header">
         <h2>activities</h2>
         <div className="list-controls">
+          <div className="view-toggle">
+            <button
+              className={viewMode === 'table' ? 'active' : ''}
+              onClick={() => setViewMode('table')}
+            >
+              table
+            </button>
+            <button
+              className={viewMode === 'timeline' ? 'active' : ''}
+              onClick={() => setViewMode('timeline')}
+            >
+              timeline
+            </button>
+          </div>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -66,28 +113,34 @@ export default function ActivitiesList({ onViewWorkflow }) {
             <option value="completed">completed</option>
             <option value="failed">failed</option>
           </select>
-          <button onClick={loadActivities} className="refresh-btn">
-            refresh
-          </button>
+          <RefreshButton onRefresh={loadActivities} />
         </div>
       </div>
 
       {activities.length === 0 ? (
         <div className="empty-state">
-          <p>No activities found</p>
+          <p>no activities found</p>
         </div>
+      ) : viewMode === 'timeline' ? (
+        <ActivitiesTimeline
+          activities={activities}
+          onActivityClick={onViewWorkflow}
+          formatDate={formatDate}
+        />
       ) : (
+        <>
         <div className="table-container">
           <table className="data-table">
             <thead>
               <tr>
-                <th>id</th>
-                <th>workflow</th>
-                <th>type</th>
-                <th>event #</th>
-                <th>status</th>
-                <th>retries</th>
-                <th>updated</th>
+                <TableHead columnKey="id" isLast={false}>id</TableHead>
+                <TableHead columnKey="workflow" isLast={false}>workflow</TableHead>
+                <TableHead columnKey="type" isLast={false}>type</TableHead>
+                <TableHead columnKey="eventNum" isLast={false}>event #</TableHead>
+                <TableHead columnKey="status" isLast={false}>status</TableHead>
+                <TableHead columnKey="runner" isLast={false}>runner</TableHead>
+                <TableHead columnKey="retries" isLast={false}>retries</TableHead>
+                <TableHead columnKey="updated" isLast={true}>updated</TableHead>
               </tr>
             </thead>
             <tbody>
@@ -98,8 +151,17 @@ export default function ActivitiesList({ onViewWorkflow }) {
                     onViewWorkflow && onViewWorkflow(activity.workflow_id)
                   }
                 >
-                  <td>{activity.workflow_id + '-' + activity.event_number}</td>
-                  <td>
+                  <td className="cell-truncate" title={activity.workflow_id + '-' + activity.event_number}>
+                    <span className="id-with-copy">
+                      {activity.workflow_id + '-' + activity.event_number}
+                      <CopyButton
+                        text={activity.workflow_id + '-' + activity.event_number}
+                        compact
+                        title="copy activity id"
+                      />
+                    </span>
+                  </td>
+                  <td className="cell-truncate" title={activity.workflow_id}>
                     {onViewWorkflow ? (
                       <button
                         className="event-workflow-link"
@@ -114,7 +176,13 @@ export default function ActivitiesList({ onViewWorkflow }) {
                       activity.workflow_id
                     )}
                   </td>
-                  <td>{activity.workflow_type || '—'}</td>
+                  <td className="cell-truncate" title={activity.workflow_type || '—'}>
+                    {activity.workflow_type ? (
+                      <ColoredBadge value={activity.workflow_type} />
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                   <td>{activity.event_number}</td>
                   <td>
                     <span
@@ -125,17 +193,29 @@ export default function ActivitiesList({ onViewWorkflow }) {
                       {activity.status}
                     </span>
                   </td>
-                  <td>{activity.retry_count ?? 0}</td>
-                  <td>
-                    {formatDate(
-                      activity.finished_at || activity.started_at || activity.last_attempt_at
-                    )}
+                  <td className="cell-truncate" title={activity.runner_id || '—'}>
+                    {activity.runner_id || '—'}
                   </td>
+                  <td>{activity.retry_count ?? 0}</td>
+                  <td className="cell-truncate" title={formatDate(
+                    activity.finished_at || activity.started_at || activity.last_attempt_at
+                  )}>{formatDate(
+                    activity.finished_at || activity.started_at || activity.last_attempt_at
+                  )}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {viewMode === 'table' && (
+          <PaginationBar
+            offset={offset}
+            limit={PAGE_SIZE}
+            total={total}
+            onPageChange={setOffset}
+          />
+        )}
+        </>
       )}
     </>
   );

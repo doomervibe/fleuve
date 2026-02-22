@@ -23,6 +23,10 @@ from .models import (
     DelayResponse,
     StatsResponse,
     WorkflowTypeInfo,
+    WorkflowsListResponse,
+    EventsListResponse,
+    ActivitiesListResponse,
+    DelaysListResponse,
 )
 from .discovery import discover_workflow_types, get_workflow_type_stats
 
@@ -145,7 +149,7 @@ class FleuveUIBackend:
                     stats.append(WorkflowTypeInfo(**stat))
                 return stats
 
-        @self.app.get("/api/workflows", response_model=List[WorkflowSummary])
+        @self.app.get("/api/workflows", response_model=WorkflowsListResponse)
         async def list_workflows(
             workflow_type: Optional[str] = Query(
                 None, description="Filter by workflow type"
@@ -158,17 +162,36 @@ class FleuveUIBackend:
         ):
             """List workflows with optional filtering."""
             async with self.session_maker() as s:
-                # Build query for distinct workflow IDs
-                query = select(self.event_model.workflow_id).distinct()
-
+                # Build base query for distinct workflow IDs
+                base_query = select(self.event_model.workflow_id).distinct()
                 if workflow_type:
-                    query = query.where(self.event_model.workflow_type == workflow_type)
-
+                    base_query = base_query.where(
+                        self.event_model.workflow_type == workflow_type
+                    )
                 if search:
-                    query = query.where(self.event_model.workflow_id.contains(search))
+                    base_query = base_query.where(
+                        self.event_model.workflow_id.contains(search)
+                    )
 
-                # Get workflow IDs
-                result = await s.execute(query.limit(limit).offset(offset))
+                # Get total count (matching filters)
+                count_query = select(
+                    func.count(distinct(self.event_model.workflow_id))
+                ).select_from(self.event_model)
+                if workflow_type:
+                    count_query = count_query.where(
+                        self.event_model.workflow_type == workflow_type
+                    )
+                if search:
+                    count_query = count_query.where(
+                        self.event_model.workflow_id.contains(search)
+                    )
+                total_result = await s.execute(count_query)
+                total = total_result.scalar() or 0
+
+                # Get workflow IDs with pagination
+                result = await s.execute(
+                    base_query.limit(limit).offset(offset)
+                )
                 workflow_ids = [row[0] for row in result.fetchall()]
 
                 workflows = []
@@ -200,6 +223,29 @@ class FleuveUIBackend:
                             elif isinstance(latest_event.body, dict):
                                 state = latest_event.body
 
+                            # Get runner_id from latest activity for this workflow
+                            runner_id = None
+                            try:
+                                act_result = await s.execute(
+                                    select(self.activity_model.runner_id)
+                                    .where(
+                                        self.activity_model.workflow_id
+                                        == workflow_id
+                                    )
+                                    .where(
+                                        self.activity_model.runner_id.isnot(None)
+                                    )
+                                    .order_by(
+                                        self.activity_model.started_at.desc()
+                                    )
+                                    .limit(1)
+                                )
+                                row = act_result.scalar_one_or_none()
+                                if row is not None:
+                                    runner_id = row[0] if hasattr(row, "__getitem__") else row
+                            except Exception:
+                                pass  # runner_id column may not exist yet
+
                             workflows.append(
                                 WorkflowSummary(
                                     workflow_id=workflow_id,
@@ -213,13 +259,14 @@ class FleuveUIBackend:
                                     ),
                                     updated_at=latest_event.at,
                                     is_completed=False,  # Would need workflow class to determine
+                                    runner_id=runner_id,
                                 )
                             )
                     except Exception as e:
                         logger.warning(f"Error getting workflow {workflow_id}: {e}")
                         continue
 
-                return workflows
+                return WorkflowsListResponse(workflows=workflows, total=total)
 
         @self.app.get("/api/workflows/{workflow_id}", response_model=WorkflowDetail)
         async def get_workflow(workflow_id: str):
@@ -495,27 +542,50 @@ class FleuveUIBackend:
                     ),
                 }
 
-        @self.app.get("/api/events", response_model=List[EventResponse])
+        @self.app.get("/api/events", response_model=EventsListResponse)
         async def list_events(
             workflow_type: Optional[str] = Query(None),
             workflow_id: Optional[str] = Query(None),
             event_type: Optional[str] = Query(None),
+            tag: Optional[str] = Query(
+                None,
+                description="Filter by tag (in metadata.tags or metadata.workflow_tags)",
+            ),
             limit: int = Query(100, ge=1, le=1000),
             offset: int = Query(0, ge=0),
         ):
             """List events across workflows with filtering."""
-            async with self.session_maker() as s:
-                query = select(self.event_model)
+            from sqlalchemy import text
 
+            async with self.session_maker() as s:
+                base_query = select(self.event_model)
                 if workflow_type:
-                    query = query.where(self.event_model.workflow_type == workflow_type)
+                    base_query = base_query.where(
+                        self.event_model.workflow_type == workflow_type
+                    )
                 if workflow_id:
-                    query = query.where(self.event_model.workflow_id == workflow_id)
+                    base_query = base_query.where(
+                        self.event_model.workflow_id == workflow_id
+                    )
                 if event_type:
-                    query = query.where(self.event_model.event_type == event_type)
+                    base_query = base_query.where(
+                        self.event_model.event_type == event_type
+                    )
+
+                # Tag filter: PostgreSQL JSONB ? operator for array containment
+                if tag:
+                    tag_cond = text(
+                        "(metadata->'tags' ? :tag OR metadata->'workflow_tags' ? :tag)"
+                    )
+                    base_query = base_query.where(tag_cond.bindparams(tag=tag))
+
+                # Get total count
+                count_stmt = select(func.count()).select_from(base_query.subquery())
+                total_result = await s.execute(count_stmt)
+                total = total_result.scalar() or 0
 
                 result = await s.execute(
-                    query.order_by(self.event_model.global_id.desc())
+                    base_query.order_by(self.event_model.global_id.desc())
                     .limit(limit)
                     .offset(offset)
                 )
@@ -528,6 +598,7 @@ class FleuveUIBackend:
                     elif isinstance(event.body, dict):
                         body = event.body
 
+                    meta = event.metadata_ if hasattr(event, "metadata_") else {}
                     events.append(
                         EventResponse(
                             global_id=event.global_id,
@@ -537,13 +608,30 @@ class FleuveUIBackend:
                             event_type=event.event_type,
                             body=body,
                             at=event.at,
-                            metadata=(
-                                event.metadata_ if hasattr(event, "metadata_") else {}
-                            ),
+                            metadata=meta,
                         )
                     )
 
-                return events
+                # Distinct event_types for filter dropdown
+                event_types_result = await s.execute(
+                    select(distinct(self.event_model.event_type))
+                )
+                event_types = [r[0] for r in event_types_result.fetchall() if r[0]]
+
+                # Collect tags from result for filter dropdown
+                all_tags = set()
+                for ev in events:
+                    m = getattr(ev, "metadata", None) or {}
+                    for t in m.get("tags", []) or m.get("workflow_tags", []):
+                        if t:
+                            all_tags.add(t)
+
+                return EventsListResponse(
+                    events=events,
+                    total=total,
+                    event_types=event_types,
+                    tags=sorted(all_tags),
+                )
 
         @self.app.get("/api/events/{event_id}", response_model=EventResponse)
         async def get_event(event_id: int):
@@ -576,7 +664,7 @@ class FleuveUIBackend:
                     metadata=event.metadata_ if hasattr(event, "metadata_") else {},
                 )
 
-        @self.app.get("/api/activities", response_model=List[ActivityResponse])
+        @self.app.get("/api/activities", response_model=ActivitiesListResponse)
         async def list_activities(
             workflow_id: Optional[str] = Query(None),
             workflow_type: Optional[str] = Query(None),
@@ -586,17 +674,28 @@ class FleuveUIBackend:
         ):
             """List activities with filtering."""
             async with self.session_maker() as s:
-                query = select(self.activity_model)
+                base_query = select(self.activity_model)
 
                 if workflow_id:
-                    query = query.where(self.activity_model.workflow_id == workflow_id)
+                    base_query = base_query.where(
+                        self.activity_model.workflow_id == workflow_id
+                    )
                 if workflow_type:
-                    query = query.where(self.activity_model.workflow_type == workflow_type)
+                    base_query = base_query.where(
+                        self.activity_model.workflow_type == workflow_type
+                    )
                 if status:
-                    query = query.where(self.activity_model.status == status)
+                    base_query = base_query.where(
+                        self.activity_model.status == status
+                    )
+
+                # Get total count
+                count_stmt = select(func.count()).select_from(base_query.subquery())
+                total_result = await s.execute(count_stmt)
+                total = total_result.scalar() or 0
 
                 result = await s.execute(
-                    query.order_by(self.activity_model.started_at.desc())
+                    base_query.order_by(self.activity_model.started_at.desc())
                     .limit(limit)
                     .offset(offset)
                 )
@@ -625,10 +724,11 @@ class FleuveUIBackend:
                             error_message=activity.error_message,
                             error_type=activity.error_type,
                             checkpoint=checkpoint,
+                            runner_id=getattr(activity, "runner_id", None),
                         )
                     )
 
-                return activities
+                return ActivitiesListResponse(activities=activities, total=total)
 
         @self.app.get(
             "/api/workflows/{workflow_id}/activities",
@@ -636,9 +736,10 @@ class FleuveUIBackend:
         )
         async def get_workflow_activities(workflow_id: str):
             """Get activities for a specific workflow."""
-            return await list_activities(
+            resp = await list_activities(
                 workflow_id=workflow_id, status=None, limit=1000, offset=0
             )
+            return resp.activities
 
         @self.app.post("/api/activities/{workflow_id}/{event_number}/retry")
         async def retry_failed_action(workflow_id: str, event_number: int):
@@ -705,7 +806,7 @@ class FleuveUIBackend:
                 raise HTTPException(status_code=400, detail=result.msg)
             return {"status": "ok", "message": "Workflow cancelled"}
 
-        @self.app.get("/api/delays", response_model=List[DelayResponse])
+        @self.app.get("/api/delays", response_model=DelaysListResponse)
         async def list_delays(
             workflow_type: Optional[str] = Query(None),
             workflow_id: Optional[str] = Query(None),
@@ -714,19 +815,24 @@ class FleuveUIBackend:
         ):
             """List scheduled delays."""
             async with self.session_maker() as s:
-                query = select(self.delay_schedule_model)
+                base_query = select(self.delay_schedule_model)
 
                 if workflow_type:
-                    query = query.where(
+                    base_query = base_query.where(
                         self.delay_schedule_model.workflow_type == workflow_type
                     )
                 if workflow_id:
-                    query = query.where(
+                    base_query = base_query.where(
                         self.delay_schedule_model.workflow_id == workflow_id
                     )
 
+                # Get total count
+                count_stmt = select(func.count()).select_from(base_query.subquery())
+                total_result = await s.execute(count_stmt)
+                total = total_result.scalar() or 0
+
                 result = await s.execute(
-                    query.order_by(self.delay_schedule_model.delay_until.asc())
+                    base_query.order_by(self.delay_schedule_model.delay_until.asc())
                     .limit(limit)
                     .offset(offset)
                 )
@@ -751,16 +857,17 @@ class FleuveUIBackend:
                         )
                     )
 
-                return delays
+                return DelaysListResponse(delays=delays, total=total)
 
         @self.app.get(
             "/api/workflows/{workflow_id}/delays", response_model=List[DelayResponse]
         )
         async def get_workflow_delays(workflow_id: str):
             """Get delays for a specific workflow."""
-            return await list_delays(
+            resp = await list_delays(
                 workflow_type=None, workflow_id=workflow_id, limit=1000, offset=0
             )
+            return resp.delays
 
         @self.app.get("/api/stats", response_model=StatsResponse)
         async def get_stats():

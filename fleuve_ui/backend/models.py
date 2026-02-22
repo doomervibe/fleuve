@@ -15,6 +15,7 @@ class WorkflowSummary(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     is_completed: bool = False
+    runner_id: Optional[str] = None  # Runner that last processed this workflow
 
 
 class WorkflowDetail(BaseModel):
@@ -57,6 +58,7 @@ class ActivityResponse(BaseModel):
     error_message: Optional[str] = None
     error_type: Optional[str] = None
     checkpoint: Dict[str, Any] = {}
+    runner_id: Optional[str] = None  # Runner/reader that executed this activity
 
 
 class DelayResponse(BaseModel):
@@ -93,3 +95,33 @@ class WorkflowTypeInfo(BaseModel):
     workflow_count: int
     event_count: int
     last_event_at: Optional[datetime] = None
+
+
+class WorkflowsListResponse(BaseModel):
+    """Paginated workflows list."""
+
+    workflows: List[WorkflowSummary]
+    total: int
+
+
+class EventsListResponse(BaseModel):
+    """Paginated events list with filter options."""
+
+    events: List[EventResponse]
+    total: int
+    event_types: List[str] = []
+    tags: List[str] = []
+
+
+class ActivitiesListResponse(BaseModel):
+    """Paginated activities list."""
+
+    activities: List[ActivityResponse]
+    total: int
+
+
+class DelaysListResponse(BaseModel):
+    """Paginated delays list."""
+
+    delays: List[DelayResponse]
+    total: int

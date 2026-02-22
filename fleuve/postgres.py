@@ -1,7 +1,7 @@
 import hashlib
 import os
 from datetime import datetime, timedelta
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, Optional, TypeVar
 
 import zstandard
 from cryptography.hazmat.primitives.ciphers import Cipher, modes
@@ -315,6 +315,11 @@ class Activity(Base):
     error_type: Mapped[str] = mapped_column(String, nullable=True)
 
     result: Mapped[bytes] = mapped_column(BYTEA, nullable=True)
+
+    # Runner/reader that is executing or last executed this activity
+    runner_id: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True, index=True
+    )
 
 
 class DelaySchedule(Base):

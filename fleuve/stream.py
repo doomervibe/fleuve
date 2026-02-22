@@ -44,6 +44,7 @@ class ConsumedEvent(Generic[T]):
     at: datetime.datetime
     workflow_type: str
     metadata_: dict = dataclasses.field(default_factory=dict)
+    reader_name: str | None = None  # Runner/reader that consumed this event
 
     @property
     def agg_id(self) -> str:
@@ -179,6 +180,7 @@ class Reader(Generic[T]):
                 at=event.at,
                 workflow_type=event.workflow_type,
                 metadata_=event.metadata_ or {},
+                reader_name=self.name,
             )
 
     async def _mark_horizon(self):
@@ -315,6 +317,8 @@ class HybridReader(Reader[T]):
             async for event, ack in self._jetstream_consumer.fetch_events(
                 batch_size=self._batch_size
             ):
+                if event.reader_name is None:
+                    event = dataclasses.replace(event, reader_name=self.name)
                 yield event
 
                 # Update offset

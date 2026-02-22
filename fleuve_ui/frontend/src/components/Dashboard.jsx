@@ -1,8 +1,17 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import RefreshButton from './common/RefreshButton';
+import PaginationBar from './common/PaginationBar';
+import ColoredBadge from './common/ColoredBadge';
+import { SkeletonCard } from './common/Skeleton';
+import { formatDate } from '../utils/format';
+
+const PAGE_SIZE = 24;
 
 export default function Dashboard({ onViewWorkflow }) {
   const [workflows, setWorkflows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('');
@@ -10,20 +19,23 @@ export default function Dashboard({ onViewWorkflow }) {
   const [searchError, setSearchError] = useState(null);
 
   useEffect(() => {
+    setOffset(0);
+  }, [filter, searchId]);
+
+  useEffect(() => {
     loadWorkflows();
     const interval = setInterval(loadWorkflows, 5000);
     return () => clearInterval(interval);
-  }, [filter, searchId]);
+  }, [filter, searchId, offset]);
 
   async function loadWorkflows() {
     try {
-      const params = {};
+      const params = { limit: PAGE_SIZE, offset };
       if (filter) params.workflow_type = filter;
       if (searchId.trim()) params.workflow_id = searchId.trim();
-      const data = await api.workflows.list(
-        Object.keys(params).length ? params : undefined
-      );
+      const data = await api.workflows.list(params);
       setWorkflows(data.workflows || []);
+      setTotal(data.total ?? data.workflows?.length ?? 0);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load workflows');
@@ -31,10 +43,6 @@ export default function Dashboard({ onViewWorkflow }) {
       setLoading(false);
     }
   }
-
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleString();
-  };
 
   const getWorkflowTypes = () => {
     const types = new Set(workflows.map((w) => w.workflow_type));
@@ -56,10 +64,16 @@ export default function Dashboard({ onViewWorkflow }) {
 
   if (loading) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>loading workflows...</p>
-      </div>
+      <>
+        <div className="list-header">
+          <h2>workflows</h2>
+        </div>
+        <div className="workflows-grid">
+          {Array.from({ length: 8 }, (_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
+      </>
     );
   }
 
@@ -107,9 +121,7 @@ export default function Dashboard({ onViewWorkflow }) {
               </option>
             ))}
           </select>
-          <button onClick={loadWorkflows} className="refresh-btn">
-            refresh
-          </button>
+          <RefreshButton onRefresh={loadWorkflows} />
         </div>
       </div>
 
@@ -121,19 +133,20 @@ export default function Dashboard({ onViewWorkflow }) {
         <div className="empty-state">
           <p>
             {searchId.trim()
-              ? `No workflows match "${searchId.trim()}"`
-              : 'No workflows found'}
+              ? `no workflows match "${searchId.trim()}"`
+              : 'no workflows found'}
           </p>
           <p className="hint">
             {searchId.trim()
-              ? 'Try a different ID or clear the search to see all.'
-              : 'Run an example to create workflows:'}
+              ? 'try a different id or clear the search to see all.'
+              : 'run an example to create workflows:'}
           </p>
           {!searchId.trim() && (
             <pre>make run-example</pre>
           )}
         </div>
       ) : (
+        <>
         <div className="workflows-grid">
           {workflows.map((workflow) => (
             <div
@@ -142,8 +155,8 @@ export default function Dashboard({ onViewWorkflow }) {
               onClick={() => onViewWorkflow(workflow.workflow_id)}
             >
               <div className="workflow-card-header">
-                <h3>{workflow.workflow_id}</h3>
-                <span className="workflow-type">{workflow.workflow_type}</span>
+                <h3 title={workflow.workflow_id}>{workflow.workflow_id}</h3>
+                <ColoredBadge value={workflow.workflow_type} className="workflow-type" title={workflow.workflow_type} />
               </div>
               <div className="workflow-card-body">
                 <div className="workflow-stat">
@@ -155,18 +168,31 @@ export default function Dashboard({ onViewWorkflow }) {
                 <div className="workflow-stat">
                   <span className="stat-label">last event</span>
                   <span className="stat-value">
-                    {workflow.updated_at
-                      ? formatDate(workflow.updated_at)
-                      : '—'}
+                    {formatDate(workflow.updated_at)}
                   </span>
                 </div>
+                {workflow.runner_id && (
+                  <div className="workflow-stat">
+                    <span className="stat-label">runner</span>
+                    <span className="stat-value" title={workflow.runner_id}>
+                      {workflow.runner_id}
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="workflow-card-footer">
-                Updated: {formatDate(workflow.updated_at)}
+                updated: {formatDate(workflow.updated_at)}
               </div>
             </div>
           ))}
         </div>
+        <PaginationBar
+          offset={offset}
+          limit={PAGE_SIZE}
+          total={total}
+          onPageChange={setOffset}
+        />
+        </>
       )}
     </>
   );

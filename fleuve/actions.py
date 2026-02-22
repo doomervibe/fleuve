@@ -55,10 +55,12 @@ class ActionExecutor(Generic[C, Ae]):
         ) = None,
         metrics: Any = None,
         tracer: Any = None,
+        runner_name: str | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._adapter = adapter
         self._metrics = metrics
+        self._runner_name = runner_name
         self._db_activity_model = db_activity_model
         self._db_event_model = db_event_model
         self._repo = repo
@@ -292,6 +294,7 @@ class ActionExecutor(Generic[C, Ae]):
                             else ActionStatus.RETRYING
                         ),
                         retry_count=retry_count,
+                        runner_id=getattr(event, "reader_name", None),
                     )
 
                 context = ActionContext(
@@ -508,7 +511,7 @@ class ActionExecutor(Generic[C, Ae]):
                     | (self._db_activity_model.last_attempt_at.is_(None))
                 )
             )
-            interrupted_activities = result.fetchall()
+            interrupted_activities = result.scalars().all()
 
         for activity in interrupted_activities:
             # Reconstruct the event from the database
@@ -521,15 +524,20 @@ class ActionExecutor(Generic[C, Ae]):
                     )
                     .limit(1)
                 )
-                event_row = event_result.fetchone()
+                event_row = event_result.scalar_one_or_none()
 
                 if event_row:
                     event = ConsumedEvent(
-                        agg_id=activity.workflow_id,
-                        event=event_row.body,
+                        workflow_id=activity.workflow_id,
                         event_no=activity.event_number,
-                        event_g_id=event_row.global_id,
+                        event=event_row.body,
+                        global_id=event_row.global_id,
                         at=event_row.at,
+                        workflow_type=getattr(
+                            event_row, "workflow_type", self._repo._workflow_type
+                        ),
+                        metadata_=getattr(event_row, "metadata_", None) or {},
+                        reader_name=self._runner_name,
                     )
                     logger.info(
                         f"Recovering interrupted action for {activity.workflow_id}:{activity.event_number}"
@@ -563,6 +571,7 @@ class ActionExecutor(Generic[C, Ae]):
             status=ActionStatus.PENDING,
             max_retries=self._max_retries,
             started_at=datetime.datetime.now(datetime.timezone.utc),
+            runner_id=getattr(event, "reader_name", None),
         )
         s.add(activity)
         await s.commit()
@@ -576,17 +585,21 @@ class ActionExecutor(Generic[C, Ae]):
         event_number: int,
         status: ActionStatus,
         retry_count: int = 0,
+        runner_id: str | None = None,
     ):
         """Update activity status."""
+        values = {
+            "status": status.value,
+            "retry_count": retry_count,
+            "last_attempt_at": datetime.datetime.now(datetime.timezone.utc),
+        }
+        if runner_id is not None:
+            values["runner_id"] = runner_id
         await s.execute(
             update(self._db_activity_model)
             .where(self._db_activity_model.workflow_id == workflow_id)
             .where(self._db_activity_model.event_number == event_number)
-            .values(
-                status=status.value,
-                retry_count=retry_count,
-                last_attempt_at=datetime.datetime.now(datetime.timezone.utc),
-            )
+            .values(**values)
         )
         await s.commit()
 

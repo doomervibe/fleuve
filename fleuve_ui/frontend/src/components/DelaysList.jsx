@@ -1,8 +1,19 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
+import RefreshButton from './common/RefreshButton';
+import PaginationBar from './common/PaginationBar';
+import ColoredBadge from './common/ColoredBadge';
+import CopyButton from './common/CopyButton';
+import { SkeletonRow } from './common/Skeleton';
+import { useResizableTableColumns } from '../hooks/useResizableTableColumns';
+import { formatDate } from '../utils/format';
+
+const PAGE_SIZE = 50;
 
 export default function DelaysList({ onViewWorkflow }) {
   const [delays, setDelays] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -10,12 +21,13 @@ export default function DelaysList({ onViewWorkflow }) {
     loadDelays();
     const interval = setInterval(loadDelays, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [offset]);
 
   async function loadDelays() {
     try {
-      const data = await api.delays.list({ limit: 50 });
+      const data = await api.delays.list({ limit: PAGE_SIZE, offset });
       setDelays(data.delays || []);
+      setTotal(data.total ?? data.delays?.length ?? 0);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load delays');
@@ -23,10 +35,6 @@ export default function DelaysList({ onViewWorkflow }) {
       setLoading(false);
     }
   }
-
-  const formatDate = (dateStr) => {
-    return new Date(dateStr).toLocaleString();
-  };
 
   const getTimeRemaining = (delayUntil) => {
     const now = new Date();
@@ -48,12 +56,33 @@ export default function DelaysList({ onViewWorkflow }) {
     return `${hours}h ${minutes}m`;
   };
 
+  const getDelayId = (d) =>
+    d.id ?? d.workflow_id + '-' + (d.event_version ?? d.event_number ?? '');
+
+  const delayColumns = [
+    { key: 'id', label: 'id', defaultWidth: 140 },
+    { key: 'workflow', label: 'workflow', defaultWidth: 140 },
+    { key: 'type', label: 'type', defaultWidth: 100 },
+    { key: 'eventNum', label: 'event #', defaultWidth: 60 },
+    { key: 'executeAt', label: 'execute at', defaultWidth: 140 },
+    { key: 'timeRemaining', label: 'time remaining', defaultWidth: 100 },
+  ];
+  const { TableHead } = useResizableTableColumns('fleuve-delays-table', delayColumns);
+
   if (loading) {
     return (
-      <div className="loading">
-        <div className="spinner" />
-        <p>loading delays...</p>
-      </div>
+      <>
+        <div className="list-header">
+          <h2>scheduled delays</h2>
+        </div>
+        <div className="table-container">
+          <div className="skeleton-table">
+            {Array.from({ length: 10 }, (_, i) => (
+              <SkeletonRow key={i} cols={6} />
+            ))}
+          </div>
+        </div>
+      </>
     );
   }
 
@@ -66,35 +95,31 @@ export default function DelaysList({ onViewWorkflow }) {
     );
   }
 
-  const getDelayId = (d) =>
-    d.id ?? d.workflow_id + '-' + (d.event_version ?? d.event_number ?? '');
-
   return (
     <>
       <div className="list-header">
         <h2>scheduled delays</h2>
         <div className="list-controls">
-          <button onClick={loadDelays} className="refresh-btn">
-            refresh
-          </button>
+          <RefreshButton onRefresh={loadDelays} />
         </div>
       </div>
 
       {delays.length === 0 ? (
         <div className="empty-state">
-          <p>No scheduled delays</p>
+          <p>no scheduled delays</p>
         </div>
       ) : (
+        <>
         <div className="table-container">
           <table className="data-table">
             <thead>
               <tr>
-                <th>id</th>
-                <th>workflow</th>
-                <th>type</th>
-                <th>event #</th>
-                <th>execute at</th>
-                <th>time remaining</th>
+                <TableHead columnKey="id" isLast={false}>id</TableHead>
+                <TableHead columnKey="workflow" isLast={false}>workflow</TableHead>
+                <TableHead columnKey="type" isLast={false}>type</TableHead>
+                <TableHead columnKey="eventNum" isLast={false}>event #</TableHead>
+                <TableHead columnKey="executeAt" isLast={false}>execute at</TableHead>
+                <TableHead columnKey="timeRemaining" isLast={true}>time remaining</TableHead>
               </tr>
             </thead>
             <tbody>
@@ -105,8 +130,13 @@ export default function DelaysList({ onViewWorkflow }) {
                     onViewWorkflow && onViewWorkflow(delay.workflow_id)
                   }
                 >
-                  <td>{getDelayId(delay)}</td>
-                  <td>
+                  <td className="cell-truncate" title={getDelayId(delay)}>
+                    <span className="id-with-copy">
+                      {getDelayId(delay)}
+                      <CopyButton text={getDelayId(delay)} compact title="copy delay id" />
+                    </span>
+                  </td>
+                  <td className="cell-truncate" title={delay.workflow_id}>
                     {onViewWorkflow ? (
                       <button
                         className="event-workflow-link"
@@ -121,15 +151,24 @@ export default function DelaysList({ onViewWorkflow }) {
                       delay.workflow_id
                     )}
                   </td>
-                  <td>{delay.workflow_type}</td>
+                  <td className="cell-truncate" title={delay.workflow_type}>
+                    <ColoredBadge value={delay.workflow_type} />
+                  </td>
                   <td>{delay.event_version ?? delay.event_number ?? '—'}</td>
-                  <td>{formatDate(delay.delay_until)}</td>
+                  <td className="cell-truncate" title={formatDate(delay.delay_until)}>{formatDate(delay.delay_until)}</td>
                   <td>{getTimeRemaining(delay.delay_until)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        <PaginationBar
+          offset={offset}
+          limit={PAGE_SIZE}
+          total={total}
+          onPageChange={setOffset}
+        />
+        </>
       )}
     </>
   );
