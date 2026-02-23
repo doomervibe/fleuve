@@ -90,7 +90,11 @@ class EncryptedPydanticType(TypeDecorator[ModelT]):
     def process_bind_param(self, value: ModelT | None, _dialect: Dialect) -> Any:
         if value is None:
             return None
-        json_data_bytes = self._adapter.dump_json(value)
+        json_data_bytes = (
+            value.model_dump_json().encode()
+            if isinstance(value, BaseModel)
+            else self._adapter.dump_json(value)
+        )
         if self.ZSTD_COMPRESSSION:
             json_data_bytes = b"zstd:" + zstandard.compress(json_data_bytes)
         return self._encryption.encrypt(json_data_bytes)
@@ -122,6 +126,8 @@ class PydanticType(TypeDecorator[ModelT]):
         if value is None:
             return None
         # Return JSON string for JSONB column
+        if isinstance(value, BaseModel):
+            return value.model_dump_json()
         return self._adapter.dump_json(value).decode("utf-8")
 
     def process_result_value(self, value: Any, _dialect: Dialect) -> ModelT | None:
