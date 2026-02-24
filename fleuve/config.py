@@ -197,6 +197,7 @@ def make_partitioned_runner_from_config(
         session_maker=session_maker,
         db_sub_type=config.db_sub_type,
         se=SideEffects.make_side_effects(
+            repo=repo,
             workflow_type=config.workflow_type,
             adapter=config.adapter,
             session_maker=session_maker,

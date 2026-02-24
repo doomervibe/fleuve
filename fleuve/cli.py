@@ -80,13 +80,11 @@ def create_project(
     # Create project directory
     project_dir.mkdir(parents=True, exist_ok=True)
 
+    package_dir = project_dir / project_name
+    workflows_dir = project_dir / "workflows"
     if not multi_workflow:
-        # Single workflow: create package directory
-        package_dir = project_dir / project_name
         package_dir.mkdir(exist_ok=True)
     else:
-        # Multi-workflow: create workflows directory
-        workflows_dir = project_dir / "workflows"
         workflows_dir.mkdir(exist_ok=True)
 
     # Template variables for project

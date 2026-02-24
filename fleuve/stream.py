@@ -2,9 +2,9 @@ import asyncio
 import dataclasses
 import datetime
 import logging
-from typing import AsyncGenerator, Generic, Type, TypeVar
+from typing import Any, AsyncGenerator, Generic, Type, TypeVar, cast
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import CursorResult, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fleuve.postgres import Offset, StoredEvent
@@ -71,7 +71,7 @@ class Reader(Generic[T]):
         self.mark_horizon_every = 10
         self._init = False
         self._sleeper = sleeper or Sleeper(
-            min_sleep=datetime.timedelta(seconds=0),
+            min_sleep=datetime.timedelta(milliseconds=100),
             max_sleep=datetime.timedelta(seconds=20),
         )
         self.db_model = db_model
@@ -116,6 +116,7 @@ class Reader(Generic[T]):
                     # Check if we've reached stop_at_offset after processing event
                     if (
                         self._stop_at_offset is not None
+                        and self.last_read_event_g_id is not None
                         and self.last_read_event_g_id >= self._stop_at_offset
                     ):
                         logger.info(
@@ -195,13 +196,13 @@ class Reader(Generic[T]):
             return
 
         async with self._s() as s:
-            result = await s.execute(
+            result = cast(CursorResult[Any], await s.execute(
                 update(self.offset_model)
                 .where(
                     self.offset_model.reader == self.name,
                 )
                 .values({"last_read_event_no": last_num})
-            )
+            ))
             assert result.rowcount in (0, 1)
             if result.rowcount == 0:
                 await s.execute(
@@ -313,6 +314,7 @@ class HybridReader(Reader[T]):
 
     async def _iter_from_jetstream(self) -> AsyncGenerator[ConsumedEvent[T], None]:
         """Consume events from JetStream."""
+        assert self._jetstream_consumer is not None
         while True:
             async for event, ack in self._jetstream_consumer.fetch_events(
                 batch_size=self._batch_size
@@ -330,6 +332,7 @@ class HybridReader(Reader[T]):
                 # Check if we've reached stop_at_offset
                 if (
                     self._stop_at_offset is not None
+                    and self.last_read_event_g_id is not None
                     and self.last_read_event_g_id >= self._stop_at_offset
                 ):
                     logger.info(
@@ -355,6 +358,7 @@ class HybridReader(Reader[T]):
                     # Check if we've reached stop_at_offset
                     if (
                         self._stop_at_offset is not None
+                        and self.last_read_event_g_id is not None
                         and self.last_read_event_g_id >= self._stop_at_offset
                     ):
                         logger.info(
@@ -429,7 +433,7 @@ class Readers:
             # Create JetStream consumer
             jetstream_consumer = JetStreamConsumer(
                 nats_client=self._nats_client,
-                stream_name=self._jetstream_stream_name,
+                stream_name=self._jetstream_stream_name or "",
                 consumer_name=reader_name,
                 workflow_type=self._workflow_type or "",
                 event_model_type=self._model,

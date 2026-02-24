@@ -153,7 +153,7 @@ class TestReader:
             offset_model=TestOffsetModel,
         )
         assert reader._sleeper is not None
-        assert reader._sleeper._min_sleep == datetime.timedelta(seconds=0)
+        assert reader._sleeper._min_sleep == datetime.timedelta(milliseconds=100)
         assert reader._sleeper._max_sleep == datetime.timedelta(seconds=20)
 
     @pytest.mark.asyncio

@@ -423,9 +423,13 @@ class ActionExecutor(Generic[C, Ae]):
                         f"Retrying action for {workflow_id}:{event_number} "
                         f"after {delay}s (attempt {retry_count + 1}/{activity.retry_policy.max_retries + 1})"
                     )
+                else:
+                    delay = activity.retry_policy.backoff_min.total_seconds()
                 await asyncio.sleep(delay)
 
         # All retries exhausted
+        if last_exception is None:
+            last_exception = RuntimeError("Action failed after all retries")
         async with self._session_maker() as s:
             await self._mark_action_failed(s, workflow_id, event_number, last_exception)
         logger.error(

@@ -8,50 +8,51 @@ including metrics for:
 - System health and errors
 """
 
+from __future__ import annotations
+
 from typing import Any
 
 try:
-    from prometheus_client import Counter, Gauge, Histogram
+    from prometheus_client import Counter, Gauge, Histogram  # type: ignore[import-untyped]
 
-    PROMETHEUS_AVAILABLE = True
+    _PROMETHEUS_AVAILABLE: bool = True
 except ImportError:
-    PROMETHEUS_AVAILABLE = False
+    _PROMETHEUS_AVAILABLE = False
 
-    # Stub implementations if prometheus_client is not installed
-    class Counter:
-        def __init__(self, *args, **kwargs):
+    class Counter:  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def labels(self, *args, **kwargs):
+        def labels(self, *args: Any, **kwargs: Any) -> Counter:
             return self
 
-        def inc(self, amount=1):
+        def inc(self, amount: float = 1) -> None:
             pass
 
-    class Gauge:
-        def __init__(self, *args, **kwargs):
+    class Gauge:  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def labels(self, *args, **kwargs):
+        def labels(self, *args: Any, **kwargs: Any) -> Gauge:
             return self
 
-        def set(self, value):
+        def set(self, value: float) -> None:
             pass
 
-        def inc(self, amount=1):
+        def inc(self, amount: float = 1) -> None:
             pass
 
-        def dec(self, amount=1):
+        def dec(self, amount: float = 1) -> None:
             pass
 
-    class Histogram:
-        def __init__(self, *args, **kwargs):
+    class Histogram:  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
 
-        def labels(self, *args, **kwargs):
+        def labels(self, *args: Any, **kwargs: Any) -> Histogram:
             return self
 
-        def observe(self, value):
+        def observe(self, value: float) -> None:
             pass
 
 
@@ -82,7 +83,7 @@ class FleuveMetrics:
             enable_metrics: Whether to enable Prometheus metrics (default: True)
         """
         self.workflow_type = workflow_type
-        self.enabled = enable_metrics and PROMETHEUS_AVAILABLE
+        self.enabled = enable_metrics and _PROMETHEUS_AVAILABLE
 
         if not self.enabled:
             return

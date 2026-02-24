@@ -87,7 +87,7 @@ class EncryptedPydanticType(TypeDecorator[ModelT]):
         self._adapter = TypeAdapter(pydantic_type)
         self._encryption = encryption or Encryption(load_storage_key())
 
-    def process_bind_param(self, value: ModelT | None, _dialect: Dialect) -> Any:
+    def process_bind_param(self, value: ModelT | None, dialect: Dialect) -> Any:
         if value is None:
             return None
         json_data_bytes = (
@@ -99,7 +99,7 @@ class EncryptedPydanticType(TypeDecorator[ModelT]):
             json_data_bytes = b"zstd:" + zstandard.compress(json_data_bytes)
         return self._encryption.encrypt(json_data_bytes)
 
-    def process_result_value(self, value: Any, _dialect: Dialect) -> ModelT | None:
+    def process_result_value(self, value: Any, dialect: Dialect) -> ModelT | None:
         if value is None:
             return None
         json_data_bytes = self._encryption.decrypt(value)
@@ -122,7 +122,7 @@ class PydanticType(TypeDecorator[ModelT]):
         self._pydantic_type = pydantic_type
         self._adapter = TypeAdapter(pydantic_type)
 
-    def process_bind_param(self, value: ModelT | None, _dialect: Dialect) -> Any:
+    def process_bind_param(self, value: ModelT | None, dialect: Dialect) -> Any:
         if value is None:
             return None
         # Return JSON string for JSONB column
@@ -130,9 +130,12 @@ class PydanticType(TypeDecorator[ModelT]):
             return value.model_dump_json()
         return self._adapter.dump_json(value).decode("utf-8")
 
-    def process_result_value(self, value: Any, _dialect: Dialect) -> ModelT | None:
+    def process_result_value(self, value: Any, dialect: Dialect) -> ModelT | None:
         if value is None:
             return None
+        # JSONB returns dict (psycopg2) or str (asyncpg); handle both
+        if isinstance(value, dict):
+            return self._adapter.validate_python(value)
         return self._adapter.validate_json(value)
 
 

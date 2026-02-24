@@ -12,7 +12,9 @@ import datetime
 import logging
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, insert, select, update
+from typing import Any, cast
+
+from sqlalchemy import CursorResult, delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fleuve.postgres import Offset, ScalingOperation
@@ -197,11 +199,11 @@ async def merge_offsets_on_scale_down(
                 # Update to maximum offset to ensure no events are missed
                 if max_offset > existing_offset:
                     # Try update first
-                    update_result = await s.execute(
+                    update_result = cast(CursorResult[Any], await s.execute(
                         update(offset_model)
                         .where(offset_model.reader == target_reader_name)
                         .values({"last_read_event_no": max_offset})
-                    )
+                    ))
                     if update_result.rowcount == 0:
                         # Insert if doesn't exist
                         await s.execute(
@@ -328,11 +330,11 @@ async def update_scaling_operation_status(
         status: New status (pending, synchronizing, completed, failed)
     """
     async with session_maker() as s:
-        result = await s.execute(
+        result = cast(CursorResult[Any], await s.execute(
             update(scaling_operation_model)
             .where(scaling_operation_model.workflow_type == workflow_type)
             .values({"status": status})
-        )
+        ))
         await s.commit()
         if result.rowcount > 0:
             logger.info(

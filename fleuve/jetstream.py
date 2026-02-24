@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Type
 
 from nats.aio.client import Client as NATS
-from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy, StreamConfig
+from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy, StorageType, StreamConfig
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -88,7 +88,7 @@ class JetStreamPublisher:
                     name=self._stream_name,
                     subjects=[f"events.{self._workflow_type}.*"],
                     max_age=86400,  # 24 hours retention
-                    storage="file",  # Durable storage
+                    storage=StorageType.FILE,
                     num_replicas=1,  # Increase for HA
                     duplicate_window=300,  # 5 min deduplication window
                 )
@@ -213,6 +213,7 @@ class JetStreamPublisher:
                     msg_id = f"{event.workflow_id}:{event.workflow_version}"
                     subject = f"events.{event.workflow_type}.{event.event_type}"
 
+                    assert self._js is not None
                     await self._js.publish(
                         subject,
                         event.body.model_dump_json().encode(),
@@ -325,6 +326,7 @@ class JetStreamConsumer:
             timeout: Timeout in seconds for fetch operation
         """
         try:
+            assert self._subscription is not None
             msgs = await self._subscription.fetch(batch_size, timeout=timeout)
 
             for msg in msgs:
@@ -362,15 +364,15 @@ class JetStreamConsumer:
         metadata_ = data.get("metadata_", {})
 
         return ConsumedEvent(
-            workflow_id=headers.get("workflow_id"),
-            event_no=int(headers.get("workflow_version")),
+            workflow_id=headers.get("workflow_id") or "",
+            event_no=int(headers.get("workflow_version") or 0),
             event=event,
-            global_id=int(headers.get("global_id")),
+            global_id=int(headers.get("global_id") or 0),
             at=(
                 datetime.fromisoformat(data.get("at"))
                 if "at" in data
                 else datetime.now()
             ),
-            workflow_type=headers.get("workflow_type", self._workflow_type),
+            workflow_type=headers.get("workflow_type") or self._workflow_type,
             metadata_=metadata_,
         )

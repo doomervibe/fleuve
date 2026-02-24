@@ -411,6 +411,10 @@ class WorkflowsRunner:
         Workflow tags are read directly from event metadata (injected at creation time)
         for maximum performance - no database queries needed.
         """
+        event_type = getattr(event.event, "type", None)
+        if event_type is None:
+            return []
+
         if not self._cache_initialized:
             # Fallback to database if cache not ready (shouldn't happen)
             logger.warning(
@@ -434,7 +438,7 @@ class WorkflowsRunner:
         for workflow_id, subscriptions in self._subscription_cache.items():
             for sub in subscriptions:
                 if sub.matches_event(
-                    event.workflow_id, event.event.type, event_tags, workflow_tags
+                    event.workflow_id, event_type, event_tags, workflow_tags
                 ):
                     matched_workflows.add(workflow_id)
                     break  # No need to check other subscriptions for this workflow
@@ -446,6 +450,10 @@ class WorkflowsRunner:
 
         This is used when the cache is not initialized or during testing.
         """
+        event_type = getattr(event.event, "type", None)
+        if event_type is None:
+            return []
+
         # Get event tags from metadata
         event_tags = event.metadata_.get("tags", []) if event.metadata_ else []
 
@@ -472,14 +480,14 @@ class WorkflowsRunner:
                     or_(
                         and_(
                             self.db_sub_type.subscribed_to_event_type.in_(
-                                ["*", event.event.type]
+                                ["*", event_type]
                             ),
                             self.db_sub_type.subscribed_to_workflow
                             == event.workflow_id,
                         ),
                         and_(
                             self.db_sub_type.subscribed_to_event_type
-                            == event.event.type,
+                            == event_type,
                             self.db_sub_type.subscribed_to_workflow.in_(
                                 ["*", event.workflow_id]
                             ),

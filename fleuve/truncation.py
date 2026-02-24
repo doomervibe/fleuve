@@ -10,14 +10,16 @@ Events are only deleted when ALL of the following conditions are met:
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Type
+from typing import Any
 
-_UTC = timezone.utc
+from typing import cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fleuve.postgres import Offset, Snapshot, StoredEvent
+
+_UTC = timezone.utc
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +41,9 @@ class TruncationService:
     def __init__(
         self,
         session_maker: async_sessionmaker[AsyncSession],
-        event_model: Type[StoredEvent],
-        snapshot_model: Type[Snapshot],
-        offset_model: Type[Offset],
+        event_model: type[StoredEvent],
+        snapshot_model: type[Snapshot],
+        offset_model: type[Offset],
         workflow_type: str,
         min_retention: timedelta = timedelta(days=7),
         batch_size: int = 1000,
@@ -55,7 +57,7 @@ class TruncationService:
         self._min_retention = min_retention
         self._batch_size = batch_size
         self._check_interval = check_interval
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
         self._running = False
 
     async def start(self) -> None:
@@ -109,15 +111,15 @@ class TruncationService:
 
         for workflow_id, snap_version in snapshots:
             async with self._session_maker() as s:
-                result = await s.execute(
+                cursor_result = cast(CursorResult[Any], await s.execute(
                     delete(self._event_model)
                     .where(self._event_model.workflow_id == workflow_id)
                     .where(self._event_model.workflow_version < snap_version)
                     .where(self._event_model.global_id < min_offset)
                     .where(self._event_model.pushed == True)  # noqa: E712
                     .where(self._event_model.at < cutoff_time)
-                )
-                count = result.rowcount
+                ))
+                count: int = cursor_result.rowcount or 0
                 if count > 0:
                     await s.commit()
                     total_deleted += count

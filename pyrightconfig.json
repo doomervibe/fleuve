@@ -1,0 +1,9 @@
+{
+  "include": ["fleuve"],
+  "exclude": ["fleuve/tests", "fleuve/templates"],
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.12",
+  "reportMissingImports": "warning",
+  "reportConstantRedefinition": false,
+  "reportCallInDefaultInitializer": false
+}

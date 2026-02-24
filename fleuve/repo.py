@@ -1,7 +1,7 @@
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from typing import Any, Generic, Type, TypeVar
+from typing import Any, Generic, Type, TypeVar, cast
 from uuid import uuid4
 
 from nats.aio.client import Client as NATS
@@ -10,7 +10,7 @@ from nats.js.errors import BucketNotFoundError, KeyNotFoundError
 from pydantic import BaseModel, TypeAdapter
 import logging
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import CursorResult, delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -322,8 +322,8 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         external_subs = getattr(new_state, "external_subscriptions", []) or []
         if (old_state is None and external_subs) or (
             old_state
-            and getattr(old_state, "external_subscriptions", [])
-            or [] != external_subs
+            and (getattr(old_state, "external_subscriptions", []) or [])
+            != external_subs
         ):
             c = await s.execute(
                 select(self.db_external_sub_model).where(
@@ -352,7 +352,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                     )
 
     async def _maybe_snapshot(
-        self, s: AsyncSession, workflow_id: str, state: S, version: int
+        self, s: AsyncSession, workflow_id: str, state: StateBase, version: int
     ) -> None:
         """Upsert a snapshot if snapshotting is enabled and version hits the interval."""
         if (
@@ -384,6 +384,8 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         events = self.model.decide(None, cmd)
         if isinstance(events, Rejection):
             return events
+        if not events:
+            return Rejection(msg="Cannot create workflow with no events")
 
         state = self.model.evolve_(None, events)
         async with self._session_maker() as s:
@@ -408,9 +410,12 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
                 # Inject workflow tags into events for fast access
                 for event in events:
-                    if not hasattr(event, "metadata_"):
-                        event.metadata_ = {}
-                    event.metadata_["workflow_tags"] = tags
+                    md: dict[str, Any] = getattr(event, "metadata_", None) or {}
+                    md["workflow_tags"] = tags
+                    try:
+                        event.metadata_ = md  # type: ignore[union-attr]
+                    except (AttributeError, ValueError):
+                        object.__setattr__(event, "metadata_", md)
 
                 await s.execute(
                     insert(self.db_event_model).values(
@@ -656,10 +661,12 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         workflow_tags = await self.get_workflow_tags(workflow_id)
         if workflow_tags:
             for event in events:
-                if not hasattr(event, "metadata_"):
-                    event.metadata_ = {}
-                # Store workflow tags separately from event tags
-                event.metadata_["workflow_tags"] = workflow_tags
+                md: dict[str, Any] = getattr(event, "metadata_", None) or {}
+                md["workflow_tags"] = workflow_tags
+                try:
+                    event.metadata_ = md  # type: ignore[union-attr]
+                except (AttributeError, ValueError):
+                    object.__setattr__(event, "metadata_", md)
 
     async def get_current_state(self, s: AsyncSession, id: str) -> StoredState[S]:
         state: StoredState[S] | None = await self._es.get_state(id)
@@ -704,7 +711,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             if snap_row is not None and (
                 at_version is None or snap_row.version <= at_version
             ):
-                base_state = snap_row.state
+                base_state = cast(S, snap_row.state)
                 base_version = snap_row.version
 
         use_upcast = hasattr(self.db_event_model, "body_raw")
@@ -816,7 +823,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             if max_event_id:
                 query = query.where(self.db_event_model.global_id <= max_event_id)
 
-            result = await s.execute(query)
+            result = cast(CursorResult[Any], await s.execute(query))
             await s.commit()
 
             logger.info("Marked %d events for republishing", result.rowcount)

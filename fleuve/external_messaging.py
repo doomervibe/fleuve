@@ -14,7 +14,7 @@ import logging
 from typing import Any, Callable, Type
 
 from nats.aio.client import Client as NATS
-from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy, StreamConfig
+from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy, StorageType, StreamConfig
 from pydantic import BaseModel
 from sqlalchemy import distinct, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -217,7 +217,7 @@ class ExternalMessageConsumer:
                     name=self._stream_name,
                     subjects=[subject_pattern],
                     max_age=86400,
-                    storage="file",
+                    storage=StorageType.FILE,
                     num_replicas=1,
                 )
             )
@@ -277,6 +277,7 @@ class ExternalMessageConsumer:
         """Fetch messages and process each; ack after successful processing."""
         while self._running:
             try:
+                assert self._subscription is not None
                 msgs = await self._subscription.fetch(
                     self._batch_size, timeout=self._fetch_timeout
                 )

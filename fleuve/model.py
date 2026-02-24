@@ -1,12 +1,12 @@
 import datetime
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, Field
 
-from fleuve.stream import ConsumedEvent
 from fleuve.postgres import RetryPolicy
+from fleuve.stream import ConsumedEvent
 
 
 class EventBase(BaseModel, ABC):
@@ -51,8 +51,8 @@ class Sub(BaseModel):
 
     event_type: str
     workflow_id: str
-    tags: list[str] = []
-    tags_all: list[str] = []
+    tags: list[str] = Field(default_factory=list)
+    tags_all: list[str] = Field(default_factory=list)
 
     def matches_tags(self, event_tags: list[str], workflow_tags: list[str]) -> bool:
         """Check if subscription matches event/workflow tags.
@@ -85,7 +85,7 @@ class ExternalSub(BaseModel):
 
 class StateBase(BaseModel):
     subscriptions: list[Sub]
-    external_subscriptions: list["ExternalSub"] = []
+    external_subscriptions: list["ExternalSub"] = Field(default_factory=list)
     lifecycle: Literal["active", "paused", "cancelled"] = "active"
 
 
@@ -202,7 +202,9 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
         else:
             return None
         if state is None:
-            return StateBase(subscriptions=[], external_subscriptions=[], lifecycle=new_lifecycle)  # type: ignore[return-value]
+            return StateBase(
+                subscriptions=[], external_subscriptions=[], lifecycle=new_lifecycle
+            )  # type: ignore[return-value]
         return state.model_copy(update={"lifecycle": new_lifecycle})
 
     @staticmethod
@@ -231,7 +233,7 @@ class ActionContext(BaseModel):
 
     workflow_id: str
     event_number: int
-    checkpoint: dict = {}
+    checkpoint: dict = Field(default_factory=dict)
     retry_count: int = 0
     retry_policy: RetryPolicy
 
@@ -277,7 +279,7 @@ class Adapter(Generic[E, C], ABC):
     @abstractmethod
     async def act_on(
         self, event: ConsumedEvent[E], context: "ActionContext | None" = None
-    ) -> AsyncIterator[Union[C, CheckpointYield, "ActionTimeout"]]:
+    ) -> AsyncGenerator[Union[C, CheckpointYield, "ActionTimeout"], None]:
         """
         Execute an action for an event; yield zero or more commands and/or checkpoint updates.
 
@@ -297,7 +299,7 @@ class Adapter(Generic[E, C], ABC):
             yield  # make this an async generator; subclasses override and yield commands/checkpoints
 
     @abstractmethod
-    def to_be_act_on(self, event: Exception) -> bool:
+    def to_be_act_on(self, event: Any) -> bool:
         pass
 
     async def sync_db(
