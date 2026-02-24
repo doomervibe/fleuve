@@ -86,6 +86,14 @@ class TestActionExecutor:
             max_retries=3,
         )
 
+    async def _wait_for_executor(self, executor: ActionExecutor) -> None:
+        while True:
+            tasks = list(executor._running_actions.values())
+            if not tasks:
+                break
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.sleep(0)
+
     def test_action_executor_initialization(self, action_executor):
         """Test action executor initialization."""
         assert action_executor._max_retries == 3
@@ -170,6 +178,7 @@ class TestActionExecutor:
     ):
         """Test that already completed actions are skipped."""
         from pydantic import BaseModel
+
         from fleuve.tests.conftest import TestEvent
 
         event = ConsumedEvent(
@@ -192,6 +201,7 @@ class TestActionExecutor:
         await test_session.commit()
 
         await action_executor.execute_action(event)
+        await self._wait_for_executor(action_executor)
 
         # Should not add to running actions
         assert (
@@ -210,6 +220,7 @@ class TestActionExecutor:
     ):
         """Test successful action execution."""
         from pydantic import BaseModel
+
         from fleuve.tests.conftest import TestEvent
 
         class TestCmd(BaseModel):
@@ -234,6 +245,7 @@ class TestActionExecutor:
         )
 
         await executor.execute_action(event)
+        await self._wait_for_executor(executor)
 
         # Verify adapter was called
         assert len(adapter.called_events) > 0
@@ -265,6 +277,7 @@ class TestActionExecutor:
         ensuring that on recovery, the command will be processed again.
         """
         from pydantic import BaseModel
+
         from fleuve.tests.conftest import TestEvent
 
         class TestCmd(BaseModel):
@@ -296,6 +309,7 @@ class TestActionExecutor:
 
         # Executor retries then marks as failed; it does not re-raise
         await executor.execute_action(event)
+        await self._wait_for_executor(executor)
 
         # Verify activity was NOT marked as completed (so on recovery the command will be processed again)
         from sqlalchemy import select
@@ -308,6 +322,72 @@ class TestActionExecutor:
             )
             assert activity is not None
             assert activity.status == ActionStatus.FAILED
+
+    @pytest.mark.asyncio
+    async def test_retry_policy_and_checkpoint_updates_on_failure(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Adapter changes to retry policy and checkpoint during failure should affect current retry loop."""
+        from sqlalchemy import select
+
+        from fleuve.tests.conftest import TestEvent
+
+        class PolicyAdjustingAdapter(Adapter):
+            def __init__(self):
+                self.calls = 0
+
+            async def act_on(self, event, context=None):
+                self.calls += 1
+                context.checkpoint["attempt"] = self.calls
+                context.retry_policy = context.retry_policy.model_copy(
+                    update={"max_retries": 0}
+                )
+                if context.retry_count < 0:
+                    yield  # pragma: no cover
+                raise ValueError("boom")
+
+            def to_be_act_on(self, event):
+                return True
+
+        adapter = PolicyAdjustingAdapter()
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=adapter,
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+            max_retries=3,
+        )
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=TestEvent(value=10),
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+        )
+
+        await executor.execute_action(event)
+        await self._wait_for_executor(executor)
+
+        assert adapter.calls == 1
+
+        async with test_session_maker() as s:
+            activity = await s.scalar(
+                select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-1")
+                .where(test_activity_model.event_number == 1)
+            )
+            assert activity is not None
+            assert activity.status == ActionStatus.FAILED
+            assert activity.retry_policy.max_retries == 0
+            assert activity.checkpoint == {"attempt": 1}
 
     @pytest.mark.asyncio
     async def test_action_with_timeout(
@@ -349,6 +429,7 @@ class TestActionExecutor:
         )
 
         await executor.execute_action(event)
+        await self._wait_for_executor(executor)
 
         # Verify timeout occurred - activity should be in failed/retrying status after timeout
         from sqlalchemy import select
@@ -399,6 +480,7 @@ class TestActionExecutor:
         )
 
         await executor.execute_action(event)
+        await self._wait_for_executor(executor)
 
         from sqlalchemy import select
 
@@ -451,6 +533,7 @@ class TestActionExecutor:
         )
 
         await executor.execute_action(event)
+        await self._wait_for_executor(executor)
 
         from sqlalchemy import select
 
@@ -504,6 +587,7 @@ class TestActionExecutor:
         )
 
         await executor.execute_action(event)
+        await self._wait_for_executor(executor)
 
         assert mock_repo.process_command.call_count == 2
         mock_repo.process_command.assert_any_call(
@@ -564,7 +648,8 @@ class TestActionExecutor:
         )
 
         # Cap total time so test fails fast if it hangs (retries + backoff can take a few seconds)
-        await asyncio.wait_for(executor.execute_action(event), timeout=15.0)
+        await executor.execute_action(event)
+        await asyncio.wait_for(self._wait_for_executor(executor), timeout=15.0)
 
         from sqlalchemy import select
 
@@ -616,6 +701,7 @@ class TestActionExecutor:
         )
 
         await executor.execute_action(event)
+        await self._wait_for_executor(executor)
 
         mock_repo.process_command.assert_called_once_with(
             "wf-1", TestCommand(action="after_timeout", value=42)
@@ -660,6 +746,7 @@ class TestActionExecutor:
         )
 
         await executor.execute_action(event)
+        await self._wait_for_executor(executor)
 
         from sqlalchemy import select
 
@@ -733,6 +820,8 @@ class TestActionExecutor:
         class SlowAdapter(MockAdapter):
             async def act_on(self, event, context=None):
                 self.called_events.append((event, context))
+                if False:
+                    yield  # pragma: no cover
                 await asyncio.sleep(10)
 
         adapter = SlowAdapter()
@@ -762,9 +851,12 @@ class TestActionExecutor:
         # Cancel
         await executor.cancel_workflow_actions("wf-1")
 
-        # Action task should complete with CancelledError
-        with pytest.raises(asyncio.CancelledError):
+        # Ensure the outer execute_action task finishes and background tasks are drained
+        try:
             await action_task
+        except asyncio.CancelledError:
+            pass
+        await self._wait_for_executor(executor)
 
         # Verify activity is CANCELLED
         from sqlalchemy import select
@@ -847,8 +939,8 @@ class TestActionExecutor:
         clean_tables,
     ):
         """Test that retry_failed_action resets FAILED activity and re-executes."""
-        from fleuve.tests.conftest import TestCommand, TestWorkflow
         from fleuve.repo import AsyncRepo
+        from fleuve.tests.conftest import TestCommand, TestWorkflow
 
         adapter = MockAdapter(
             should_fail=False, return_cmd=TestCommand(action="update", value=5)
@@ -894,6 +986,7 @@ class TestActionExecutor:
             workflow_type="test_workflow",
         )
         await failing_executor.execute_action(event)
+        await self._wait_for_executor(failing_executor)
 
         async with test_session_maker() as s:
             from sqlalchemy import select
@@ -929,8 +1022,8 @@ class TestActionExecutor:
         clean_tables,
     ):
         """Test retry_failed_action returns False when activity is not FAILED."""
-        from fleuve.tests.conftest import TestWorkflow
         from fleuve.repo import AsyncRepo
+        from fleuve.tests.conftest import TestWorkflow
 
         repo = AsyncRepo(
             session_maker=test_session_maker,

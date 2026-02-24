@@ -340,6 +340,8 @@ class ActionExecutor(Generic[C, Ae]):
                             await self._update_activity_retry_policy(
                                 s, workflow_id, event_number, context.retry_policy
                             )
+                    activity.checkpoint = context.checkpoint
+                    activity.retry_policy = context.retry_policy
                     raise
                 else:
                     # Save checkpoint if it was updated during execution
