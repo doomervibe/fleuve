@@ -16,6 +16,7 @@ from fleuve.model import (
     CheckpointYield,
     EventBase,
     EvActionCancel,
+    EvContinueAsNew,
     EvDelay,
     EvDelayComplete,
     EvDirectMessage,
@@ -38,13 +39,14 @@ from fleuve.repo import (
 )
 
 # Runner and side effects
-from fleuve.runner import WorkflowsRunner, SideEffects, InflightTracker
+from fleuve.runner import WorkflowsRunner, SideEffects, InflightTracker, TokenBucket
 
 # Configuration
 from fleuve.config import (
     WorkflowConfig,
     make_runner_from_config,
     make_partitioned_runner_from_config,
+    load_fleuve_toml,
 )
 
 # Partitioning
@@ -66,6 +68,8 @@ from fleuve.postgres import (
     DelaySchedule,
     Offset,
     ScalingOperation,
+    WorkflowMetadata,
+    WorkflowSearchAttributes,
     Base,
     PydanticType,
     EncryptedPydanticType,
@@ -83,6 +87,15 @@ from fleuve.delay import DelayScheduler
 
 # Tracing
 from fleuve.tracing import FleuveTracer
+
+# Metrics
+from fleuve.metrics import FleuveMetrics
+
+# Testing helpers
+from fleuve.testing import WorkflowTestHarness
+
+# Validation
+from fleuve.validation import validate_workflow, discover_and_validate
 
 # Gateway
 from fleuve.gateway import FleuveCommandGateway
@@ -128,6 +141,7 @@ __all__ = [
     "AlreadyExists",
     "CheckpointYield",
     "EvActionCancel",
+    "EvContinueAsNew",
     "EvDelay",
     "EvDelayComplete",
     "EvDirectMessage",
@@ -144,10 +158,12 @@ __all__ = [
     "WorkflowsRunner",
     "SideEffects",
     "InflightTracker",
+    "TokenBucket",
     # Config
     "WorkflowConfig",
     "make_runner_from_config",
     "make_partitioned_runner_from_config",
+    "load_fleuve_toml",
     # Partitioning
     "PartitionedRunnerConfig",
     "create_partitioned_configs",
@@ -163,6 +179,8 @@ __all__ = [
     "DelaySchedule",
     "Offset",
     "ScalingOperation",
+    "WorkflowMetadata",
+    "WorkflowSearchAttributes",
     "Base",
     "PydanticType",
     "EncryptedPydanticType",
@@ -179,6 +197,13 @@ __all__ = [
     "DelayScheduler",
     # Tracing
     "FleuveTracer",
+    # Metrics
+    "FleuveMetrics",
+    # Testing
+    "WorkflowTestHarness",
+    # Validation
+    "validate_workflow",
+    "discover_and_validate",
     # Gateway
     "FleuveCommandGateway",
     # Scaling

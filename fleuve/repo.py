@@ -12,7 +12,7 @@ from nats.js.errors import BucketNotFoundError, KeyNotFoundError
 from pydantic import BaseModel, TypeAdapter
 import logging
 
-from sqlalchemy import CursorResult, delete, insert, select, update
+from sqlalchemy import CursorResult, delete, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,6 +20,7 @@ from typing_extensions import Self
 
 from fleuve.model import (
     AlreadyExists,
+    EvContinueAsNew,
     EvSystemCancel,
     EvSystemPause,
     EvSystemResume,
@@ -232,11 +233,15 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         db_snapshot_model: Type[Snapshot] | None = None,
         snapshot_interval: int = 0,
         db_delay_schedule_model: Type[DelaySchedule] | None = None,
+        db_search_attributes_model: Type[Any] | None = None,
+        namespace: str | None = None,
         tracer: Any = None,
         trust_cache: bool = False,
     ) -> None:
         self._workflow_type = model.name()
         self._db_delay_schedule_model = db_delay_schedule_model
+        self._db_search_attributes_model = db_search_attributes_model
+        self._namespace = namespace  # None = default namespace (no filtering)
         self._tracer = tracer or _NoopTracer()
         self._uuid = uuid4
         self._es = es
@@ -326,6 +331,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                                     "workflow_type": self._workflow_type,
                                     "body": e,
                                     "schema_version": self.model.schema_version(),
+                                    **({"namespace": self._namespace} if self._namespace is not None else {}),
                                 }
                                 for i, e in enumerate(events, start=1)
                             ]
@@ -515,6 +521,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                                 "workflow_type": self._workflow_type,
                                 "body": e,
                                 "schema_version": self.model.schema_version(),
+                                **({"namespace": self._namespace} if self._namespace is not None else {}),
                             }
                             for i, e in enumerate(events, start=1)
                         ]
@@ -643,6 +650,166 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         new = StoredState(id=id, state=new_state, version=new_version)
         await self._es.remove_state(id)
         return new
+
+    async def continue_as_new(
+        self,
+        id: str,
+        new_cmd: C | None = None,
+        reason: str = "",
+        new_workflow_type: str | None = None,
+    ) -> "StoredState | Rejection":
+        """Reset a workflow's event log while preserving state (Continue-As-New).
+
+        Steps:
+        1. Load current state.
+        2. Force a snapshot at the current version.
+        3. Delete all existing events for the workflow.
+        4. Insert a single ``EvContinueAsNew`` marker event (version=1).
+        5. Optionally process ``new_cmd`` against the current state.
+
+        Args:
+            id: Workflow ID.
+            new_cmd: Optional initial command to run against the preserved state.
+            reason: Human-readable reason for the continuation.
+            new_workflow_type: Override workflow type label (for migrations).
+
+        Returns:
+            Updated StoredState, or Rejection if the workflow is not found.
+        """
+        if not self._db_snapshot_model:
+            return Rejection(msg="continue_as_new requires snapshotting to be enabled")
+
+        async with self._session_maker() as s:
+            current = await self.get_current_state(s, id)
+            wf_type = new_workflow_type or self._workflow_type
+
+            # Force snapshot at current version
+            stmt = (
+                pg_insert(self._db_snapshot_model)
+                .values(
+                    workflow_id=id,
+                    workflow_type=wf_type,
+                    version=current.version,
+                    state=current.state,
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_id"],
+                    set_={"version": current.version, "state": current.state},
+                )
+            )
+            await s.execute(stmt)
+
+            # Delete entire event history
+            await s.execute(
+                delete(self.db_event_model).where(
+                    self.db_event_model.workflow_id == id
+                )
+            )
+
+            # Insert marker event (version=1)
+            marker = EvContinueAsNew(
+                reason=reason, new_workflow_type=new_workflow_type
+            )
+            await s.execute(
+                insert(self.db_event_model).values(
+                    {
+                        "workflow_id": id,
+                        "workflow_version": 1,
+                        "event_type": marker.type,
+                        "workflow_type": wf_type,
+                        "body": marker,
+                        "schema_version": self.model.schema_version(),
+                    }
+                )
+            )
+            await s.commit()
+
+        new = StoredState(id=id, state=current.state, version=1)
+        await self._es.put_state(new)
+
+        # Optionally kick off a fresh command against the preserved state
+        if new_cmd is not None:
+            result = await self.process_command(id, new_cmd)
+            if isinstance(result, Rejection):
+                return result
+            stored, _ = result
+            return stored
+
+        return new
+
+    async def set_search_attributes(
+        self, workflow_id: str, attributes: dict
+    ) -> None:
+        """Upsert custom search attributes for a workflow.
+
+        Requires ``db_search_attributes_model`` to be set on the repo.
+
+        Args:
+            workflow_id: The workflow whose attributes to update.
+            attributes: Dict of attribute key/value pairs.  Merged (not replaced)
+                        with any existing attributes.
+        """
+        if not self._db_search_attributes_model:
+            raise RuntimeError(
+                "set_search_attributes requires db_search_attributes_model to be configured"
+            )
+        async with self._session_maker() as s:
+            stmt = (
+                pg_insert(self._db_search_attributes_model)
+                .values(
+                    workflow_id=workflow_id,
+                    workflow_type=self._workflow_type,
+                    attributes=attributes,
+                )
+                .on_conflict_do_update(
+                    index_elements=["workflow_id"],
+                    set_={
+                        "attributes": text(
+                            f"{self._db_search_attributes_model.__tablename__}.attributes || excluded.attributes"
+                        )
+                    },
+                )
+            )
+            await s.execute(stmt)
+            await s.commit()
+
+    async def search_workflows(
+        self, attributes: dict, limit: int = 100, offset: int = 0
+    ) -> list[str]:
+        """Find workflow IDs whose search attributes contain all given key/value pairs.
+
+        Uses the GIN index for fast JSONB containment queries.
+
+        Args:
+            attributes: Dict of attribute key/value pairs to match (containment query).
+            limit: Maximum number of results.
+            offset: Pagination offset.
+
+        Returns:
+            List of matching workflow IDs.
+        """
+        if not self._db_search_attributes_model:
+            raise RuntimeError(
+                "search_workflows requires db_search_attributes_model to be configured"
+            )
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import JSONB as _JSONB
+
+        async with self._session_maker() as s:
+            result = await s.execute(
+                select(self._db_search_attributes_model.workflow_id)
+                .where(
+                    self._db_search_attributes_model.workflow_type == self._workflow_type
+                )
+                .where(
+                    self._db_search_attributes_model.attributes.contains(
+                        cast(attributes, _JSONB)
+                    )
+                )
+                .limit(limit)
+                .offset(offset)
+            )
+            return [row[0] for row in result.fetchall()]
 
     async def replay_workflow(
         self, id: str, from_version: int

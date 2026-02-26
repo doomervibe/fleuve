@@ -125,6 +125,8 @@ class EvDelay(EventBase, Generic[C], ABC):
     id: str  # Unique ID for this delay (workflow-provided); enables multiple delays per workflow
     delay_until: datetime.datetime
     next_cmd: C
+    cron_expression: str | None = None  # croniter-compatible expression for recurring schedules
+    timezone: str | None = None  # IANA timezone name (e.g. "UTC", "America/New_York")
 
 
 class EvActionCancel(EventBase):
@@ -154,6 +156,20 @@ class EvSystemCancel(EventBase):
 
     type: Literal["system_cancel"] = "system_cancel"
     reason: str = ""
+
+
+class EvContinueAsNew(EventBase):
+    """System event that resets a workflow's event log while preserving state.
+
+    After this event is written, the event history is truncated (events deleted)
+    and a snapshot is taken.  The workflow then "continues as new" from the
+    snapshot with a fresh version counter.  Optionally the workflow type can
+    change (for in-place migrations).
+    """
+
+    type: Literal["system_continue_as_new"] = "system_continue_as_new"
+    reason: str = ""
+    new_workflow_type: str | None = None
 
 
 class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
@@ -199,6 +215,9 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
             new_lifecycle = "active"
         elif isinstance(event, EvSystemCancel):
             new_lifecycle = "cancelled"
+        elif isinstance(event, EvContinueAsNew):
+            # State is preserved; the event log is reset in repo.continue_as_new.
+            return state  # type: ignore[return-value]
         else:
             return None
         if state is None:

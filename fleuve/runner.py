@@ -30,6 +30,40 @@ from fleuve.stream import ConsumedEvent, Reader, Readers
 logger = logging.getLogger(__name__)
 
 
+class TokenBucket:
+    """Token-bucket rate limiter for gating event dispatch.
+
+    Allows ``rate`` events per second on average while tolerating short bursts.
+    Calling ``acquire()`` waits until a token is available.
+
+    Usage::
+
+        bucket = TokenBucket(rate=100.0)  # 100 events/s
+        async for event in stream.iter_events():
+            await bucket.acquire()
+            ...
+    """
+
+    def __init__(self, rate: float) -> None:
+        if rate <= 0:
+            raise ValueError("rate must be > 0")
+        self._rate = rate
+        self._tokens: float = rate
+        self._last_check: float = asyncio.get_event_loop().time()
+
+    async def acquire(self) -> None:
+        while True:
+            now = asyncio.get_event_loop().time()
+            elapsed = now - self._last_check
+            self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
+            self._last_check = now
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                return
+            sleep_time = (1.0 - self._tokens) / self._rate
+            await asyncio.sleep(sleep_time)
+
+
 class InflightTracker:
     """Tracks in-flight event processing for safe checkpointing.
 
@@ -240,6 +274,7 @@ class WorkflowsRunner:
         scaling_check_interval: int = 50,  # Check every N events
         external_message_consumer: Any | None = None,
         max_inflight: int = 1,
+        max_events_per_second: float | None = None,
     ) -> None:
         self.name = name or f"{workflow_type.name()}_runner"
         self.wf_id_rule = wf_id_rule
@@ -258,6 +293,11 @@ class WorkflowsRunner:
         self._target_offset_for_scaling: int | None = None
         self.external_message_consumer = external_message_consumer
         self._max_inflight = max(1, max_inflight)
+        self._token_bucket: TokenBucket | None = (
+            TokenBucket(max_events_per_second)
+            if max_events_per_second is not None and max_events_per_second > 0
+            else None
+        )
 
         # Subscription cache: workflow_id -> list of CachedSubscription
         # This eliminates database queries for every event
@@ -358,6 +398,10 @@ class WorkflowsRunner:
                             f"Scaling operation detected for {self.workflow_type.name()}, "
                             f"target_offset={target_offset}. Runner will stop at this offset."
                         )
+
+            # Rate limiting: throttle read speed if requested
+            if self._token_bucket is not None:
+                await self._token_bucket.acquire()
 
             # Backpressure: wait until an inflight slot is available
             while len(pending) >= self._max_inflight:

@@ -2,7 +2,9 @@ import asyncio
 import datetime
 import logging
 from typing import Generic, Type, TypeVar
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from croniter import croniter
 from pydantic import BaseModel
 from sqlalchemy import delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -91,6 +93,8 @@ class DelayScheduler(Generic[C, Se, Ds]):
                         "delay_until": delay_event.delay_until,
                         "event_version": event_version,
                         "next_command": delay_event.next_cmd,
+                        "cron_expression": delay_event.cron_expression,
+                        "timezone": delay_event.timezone,
                     }
                 )
             )
@@ -98,6 +102,33 @@ class DelayScheduler(Generic[C, Se, Ds]):
         logger.info(
             f"Registered delay {delay_event.id} for workflow {workflow_id} until {delay_event.delay_until}"
         )
+
+    def _next_cron_fire(
+        self, cron_expression: str, timezone_name: str | None
+    ) -> datetime.datetime | None:
+        """Compute the next fire time for a cron expression.
+
+        Returns a timezone-aware datetime, or None if the expression is invalid.
+        """
+        try:
+            try:
+                tz = ZoneInfo(timezone_name or "UTC")
+            except ZoneInfoNotFoundError:
+                logger.warning(
+                    f"Unknown timezone '{timezone_name}', falling back to UTC"
+                )
+                tz = ZoneInfo("UTC")
+
+            now = datetime.datetime.now(tz)
+            cron = croniter(cron_expression, now)
+            next_dt: datetime.datetime = cron.get_next(datetime.datetime)
+            # Ensure the result is timezone-aware
+            if next_dt.tzinfo is None:
+                next_dt = next_dt.replace(tzinfo=tz)
+            return next_dt
+        except Exception as e:
+            logger.error(f"Error computing cron next fire: {e}")
+            return None
 
     async def _run_loop(self):
         """Main loop that checks for workflows that should resume."""
@@ -172,12 +203,52 @@ class DelayScheduler(Generic[C, Se, Ds]):
             )
         )
 
-        # Remove the delay schedule
-        await s.execute(
-            delete(self._db_delay_schedule_model)
-            .where(self._db_delay_schedule_model.workflow_id == workflow_id)
-            .where(self._db_delay_schedule_model.delay_id == schedule.delay_id)
-        )
+        # For cron schedules: re-insert the next occurrence instead of deleting
+        if schedule.cron_expression:
+            next_fire = self._next_cron_fire(
+                schedule.cron_expression, schedule.timezone
+            )
+            if next_fire is not None:
+                await s.execute(
+                    delete(self._db_delay_schedule_model)
+                    .where(self._db_delay_schedule_model.workflow_id == workflow_id)
+                    .where(self._db_delay_schedule_model.delay_id == schedule.delay_id)
+                )
+                await s.execute(
+                    insert(self._db_delay_schedule_model).values(
+                        {
+                            "workflow_id": workflow_id,
+                            "delay_id": schedule.delay_id,
+                            "workflow_type": self._workflow_type,
+                            "delay_until": next_fire,
+                            "event_version": version_result + 1,
+                            "next_command": schedule.next_command,
+                            "cron_expression": schedule.cron_expression,
+                            "timezone": schedule.timezone,
+                        }
+                    )
+                )
+                logger.info(
+                    f"Rescheduled cron delay {schedule.delay_id} for workflow "
+                    f"{workflow_id} next fire at {next_fire}"
+                )
+            else:
+                logger.warning(
+                    f"Could not compute next cron fire time for expression "
+                    f"'{schedule.cron_expression}'; removing schedule."
+                )
+                await s.execute(
+                    delete(self._db_delay_schedule_model)
+                    .where(self._db_delay_schedule_model.workflow_id == workflow_id)
+                    .where(self._db_delay_schedule_model.delay_id == schedule.delay_id)
+                )
+        else:
+            # One-shot delay: remove the schedule
+            await s.execute(
+                delete(self._db_delay_schedule_model)
+                .where(self._db_delay_schedule_model.workflow_id == workflow_id)
+                .where(self._db_delay_schedule_model.delay_id == schedule.delay_id)
+            )
 
         await s.commit()
 

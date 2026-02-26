@@ -1,3 +1,5 @@
+import os
+import tomllib
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Callable, Type
@@ -59,6 +61,98 @@ class WorkflowConfig:
     tracer: Any = None  # FleuveTracer instance
 
 
+def load_fleuve_toml(path: str | None = None) -> dict[str, Any]:
+    """Load a ``fleuve.toml`` configuration file.
+
+    Searches (in order):
+    1. The explicit ``path`` argument.
+    2. ``$FLEUVE_CONFIG`` environment variable.
+    3. ``fleuve.toml`` in the current working directory.
+
+    Returns an empty dict if no file is found.
+
+    The TOML file can contain a ``[fleuve]`` section with any of the following
+    keys (all optional):
+
+    .. code-block:: toml
+
+        [fleuve]
+        database_url = "postgresql+asyncpg://..."
+        nats_url = "nats://localhost:4222"
+        snapshot_interval = 100
+        enable_truncation = true
+        truncation_min_retention_days = 7
+        truncation_batch_size = 1000
+        max_inflight = 4
+        max_events_per_second = 500.0
+        enable_otel = false
+        max_cache_size = 10000
+
+    Environment variables prefixed with ``FLEUVE_`` override TOML values (e.g.
+    ``FLEUVE_MAX_INFLIGHT=8``).
+    """
+    candidates = [
+        path,
+        os.getenv("FLEUVE_CONFIG"),
+        "fleuve.toml",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            with open(candidate, "rb") as fh:
+                data = tomllib.load(fh)
+            result: dict[str, Any] = data.get("fleuve", {})
+            _apply_env_overrides(result)
+            return result
+
+    result = {}
+    _apply_env_overrides(result)
+    return result
+
+
+def _apply_env_overrides(cfg: dict[str, Any]) -> None:
+    """Apply ``FLEUVE_*`` environment variables on top of cfg dict (in-place)."""
+    _BOOL_KEYS = {
+        "enable_truncation",
+        "enable_otel",
+        "enable_jetstream",
+        "enable_reconciliation",
+        "enable_external_messaging",
+        "create_tables",
+        "trust_cache",
+    }
+    _INT_KEYS = {
+        "snapshot_interval",
+        "truncation_batch_size",
+        "truncation_min_retention_days",
+        "max_inflight",
+        "max_cache_size",
+        "outbox_batch_size",
+    }
+    _FLOAT_KEYS = {
+        "max_events_per_second",
+        "outbox_poll_interval",
+    }
+
+    for env_key, env_val in os.environ.items():
+        if not env_key.startswith("FLEUVE_"):
+            continue
+        cfg_key = env_key[len("FLEUVE_"):].lower()
+        if cfg_key in _BOOL_KEYS:
+            cfg[cfg_key] = env_val.lower() in ("1", "true", "yes")
+        elif cfg_key in _INT_KEYS:
+            try:
+                cfg[cfg_key] = int(env_val)
+            except ValueError:
+                pass
+        elif cfg_key in _FLOAT_KEYS:
+            try:
+                cfg[cfg_key] = float(env_val)
+            except ValueError:
+                pass
+        else:
+            cfg[cfg_key] = env_val
+
+
 def make_runner_from_config(
     config: WorkflowConfig,
     repo: AsyncRepo,
@@ -76,6 +170,7 @@ def make_runner_from_config(
     external_stream_name: str | None = None,
     external_message_parser: Any = None,
     max_inflight: int = 1,
+    max_events_per_second: float | None = None,
 ) -> WorkflowsRunner:
     """
     Create a single WorkflowsRunner from a WorkflowConfig.
@@ -157,6 +252,7 @@ def make_runner_from_config(
         db_scaling_operation_model=config.db_scaling_operation_model,
         external_message_consumer=external_consumer,
         max_inflight=max_inflight,
+        max_events_per_second=max_events_per_second,
     )
 
 

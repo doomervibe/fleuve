@@ -152,6 +152,11 @@ class StoredEvent(Base):
     workflow_id: Mapped[str] = mapped_column(String(256))
     workflow_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
+    # Optional namespace for multi-tenant deployments.  NULL means "default namespace".
+    namespace: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True, default=None, index=True
+    )
+
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     workflow_type: Mapped[str] = mapped_column(String, nullable=False)
     schema_version: Mapped[int] = mapped_column(
@@ -235,6 +240,10 @@ class Offset(Base):
     last_read_event_no: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0
     )
+    # Optional namespace for multi-tenant deployments
+    namespace: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True, default=None
+    )
 
 
 class Subscription(Base):
@@ -251,6 +260,11 @@ class Subscription(Base):
     tags: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     tags_all: Mapped[list[str]] = mapped_column(
         ARRAY(String), nullable=False, default=list
+    )
+
+    # Optional namespace for multi-tenant deployments
+    namespace: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True, default=None
     )
 
     __table_args__ = (
@@ -342,6 +356,14 @@ class DelaySchedule(Base):
     )
     event_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
+    # Cron support: when set the scheduler re-inserts the next occurrence after each fire
+    cron_expression: Mapped[Optional[str]] = mapped_column(
+        String(256), nullable=True, default=None
+    )
+    timezone: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+
     # Abstract property - must be implemented by subclasses
     @declared_attr
     def next_command(cls) -> Mapped[BaseModel]:
@@ -404,4 +426,40 @@ class WorkflowMetadata(Base):
 
     __table_args__ = (
         Index("idx_workflow_metadata_tags", "tags", postgresql_using="gin"),
+    )
+
+
+class WorkflowSearchAttributes(Base):
+    """Table for storing queryable custom search attributes per workflow instance.
+
+    Users set attributes via ``AsyncRepo.set_search_attributes`` and query via
+    ``AsyncRepo.search_workflows``.  The ``attributes`` JSONB column is indexed
+    with GIN for efficient containment queries.
+
+    Concrete subclasses just need a ``__tablename__``::
+
+        class MySearchAttrs(WorkflowSearchAttributes):
+            __tablename__ = "my_search_attributes"
+    """
+
+    __abstract__ = True
+
+    workflow_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    workflow_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    attributes: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index(
+            "idx_workflow_search_attributes_gin",
+            "attributes",
+            postgresql_using="gin",
+        ),
     )
