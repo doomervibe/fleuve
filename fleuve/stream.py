@@ -1,10 +1,12 @@
 import asyncio
 import dataclasses
 import datetime
+import json
 import logging
-from typing import Any, AsyncGenerator, Generic, Type, TypeVar, cast
+from typing import Any, AsyncGenerator, Callable, Generic, Type, TypeVar, cast
 
 from sqlalchemy import CursorResult, insert, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fleuve.postgres import Offset, StoredEvent
@@ -35,21 +37,78 @@ class Sleeper:
 T = TypeVar("T")
 
 
-@dataclasses.dataclass(frozen=True)
 class ConsumedEvent(Generic[T]):
-    workflow_id: str
-    event_no: int
-    event: T
-    global_id: int
-    at: datetime.datetime
-    workflow_type: str
-    metadata_: dict = dataclasses.field(default_factory=dict)
-    reader_name: str | None = None  # Runner/reader that consumed this event
+    """Event consumed from the stream with lazy body validation.
+
+    The event body is validated on first access to ``event``, avoiding
+    Pydantic deserialization for events that are filtered out by routing.
+    Construct with either an already-validated ``event`` or a raw body +
+    validator pair for deferred validation.
+    """
+
+    __slots__ = (
+        "workflow_id",
+        "event_no",
+        "global_id",
+        "at",
+        "workflow_type",
+        "event_type",
+        "metadata_",
+        "reader_name",
+        "_raw_body",
+        "_body_validator",
+        "_validated_event",
+    )
+
+    def __init__(
+        self,
+        *,
+        workflow_id: str,
+        event_no: int,
+        global_id: int,
+        at: datetime.datetime,
+        workflow_type: str,
+        event_type: str = "",
+        metadata_: dict | None = None,
+        reader_name: str | None = None,
+        event: Any = None,
+        _raw_body: Any = None,
+        _body_validator: Callable | None = None,
+    ):
+        self.workflow_id = workflow_id
+        self.event_no = event_no
+        self.global_id = global_id
+        self.at = at
+        self.workflow_type = workflow_type
+        self.event_type = event_type
+        self.metadata_ = metadata_ if metadata_ is not None else {}
+        self.reader_name = reader_name
+        self._raw_body = _raw_body
+        self._body_validator = _body_validator
+        self._validated_event = event
+
+    @property
+    def event(self) -> T:
+        if self._validated_event is None and self._raw_body is not None:
+            body = self._raw_body
+            if isinstance(body, str):
+                body = json.loads(body)
+            self._validated_event = self._body_validator(body)
+            self._raw_body = None
+            self._body_validator = None
+        return self._validated_event
 
     @property
     def agg_id(self) -> str:
         """Alias for workflow_id for compatibility with framework code."""
         return self.workflow_id
+
+    def __repr__(self) -> str:
+        return (
+            f"ConsumedEvent(workflow_id={self.workflow_id!r}, event_no={self.event_no}, "
+            f"global_id={self.global_id}, event_type={self.event_type!r}, "
+            f"workflow_type={self.workflow_type!r})"
+        )
 
 
 class Reader(Generic[T]):
@@ -77,6 +136,7 @@ class Reader(Generic[T]):
         self.db_model = db_model
         self.offset_model = offset_model
         self._stop_at_offset: int | None = None
+        self.fetch_metadata: bool = True
 
     async def __aenter__(self):
         self._bg_checkpoint_marking_job = asyncio.create_task(
@@ -148,20 +208,40 @@ class Reader(Generic[T]):
             if counter == 0:
                 break
 
+    def _get_body_validator(self):
+        """Build a validator closure from the PydanticType on the body column."""
+        if not hasattr(self, "_cached_body_validator"):
+            body_col = self.db_model.__table__.c["body"]
+            pydantic_adapter = body_col.type._adapter
+            self._cached_body_validator = pydantic_adapter.validate_python
+        return self._cached_body_validator
+
     async def _fetch_new_events(self, batch_size: int = 100):
         last = await self.get_offset()
         async with self._s() as s:
+            # Lightweight existence check — avoids JSONB cast when idle
+            peek = select(self.db_model.global_id).where(
+                self.db_model.global_id > last
+            ).order_by(self.db_model.global_id).limit(1)
+            if self.event_types:
+                peek = peek.where(self.db_model.event_type.in_(self.event_types))
+            if (await s.execute(peek)).first() is None:
+                return
+
+            body_col_raw = self.db_model.__table__.c["body"].cast(JSONB).label("body_raw")
+            cols = [
+                self.db_model.global_id,
+                self.db_model.workflow_version,
+                self.db_model.workflow_type,
+                self.db_model.event_type,
+                self.db_model.workflow_id,
+                body_col_raw,
+                self.db_model.at,
+            ]
+            if self.fetch_metadata:
+                cols.append(self.db_model.metadata_)
             q = (
-                select(
-                    self.db_model.global_id,
-                    self.db_model.workflow_version,
-                    self.db_model.workflow_type,
-                    self.db_model.event_type,
-                    self.db_model.workflow_id,
-                    self.db_model.body,
-                    self.db_model.at,
-                    self.db_model.metadata_,
-                )
+                select(*cols)
                 .where(self.db_model.global_id > last)
                 .order_by(self.db_model.global_id)
                 .limit(batch_size)
@@ -172,15 +252,18 @@ class Reader(Generic[T]):
             c = await s.execute(q)
             events = c.fetchall()
 
+        validator = self._get_body_validator()
         for event in events:
             yield ConsumedEvent(
-                event=event.body,
+                _raw_body=event.body_raw,
+                _body_validator=validator,
                 workflow_id=event.workflow_id,
                 event_no=event.workflow_version,
                 global_id=event.global_id,
                 at=event.at,
                 workflow_type=event.workflow_type,
-                metadata_=event.metadata_ or {},
+                event_type=event.event_type,
+                metadata_=getattr(event, "metadata_", None) or {},
                 reader_name=self.name,
             )
 
@@ -320,7 +403,7 @@ class HybridReader(Reader[T]):
                 batch_size=self._batch_size
             ):
                 if event.reader_name is None:
-                    event = dataclasses.replace(event, reader_name=self.name)
+                    event.reader_name = self.name
                 yield event
 
                 # Update offset

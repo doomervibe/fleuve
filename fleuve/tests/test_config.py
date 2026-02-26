@@ -1,5 +1,5 @@
 """
-Tests for les.config module.
+Tests for fleuve.config module.
 """
 
 from unittest.mock import AsyncMock, MagicMock

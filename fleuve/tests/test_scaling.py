@@ -1,5 +1,5 @@
 """
-Unit tests for les.scaling module.
+Unit tests for fleuve.scaling module.
 """
 
 import asyncio

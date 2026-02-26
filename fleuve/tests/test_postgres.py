@@ -1,5 +1,5 @@
 """
-Unit tests for les.postgres module.
+Unit tests for fleuve.postgres module.
 """
 
 import os

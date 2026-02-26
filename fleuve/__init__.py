@@ -28,7 +28,14 @@ from fleuve.model import (
 )
 
 # Repository and storage
-from fleuve.repo import AsyncRepo, EuphStorageNATS, StoredState, WorkflowNotFound
+from fleuve.repo import (
+    AsyncRepo,
+    EuphStorageNATS,
+    InProcessEuphemeralStorage,
+    StoredState,
+    TieredEuphemeralStorage,
+    WorkflowNotFound,
+)
 
 # Runner and side effects
 from fleuve.runner import WorkflowsRunner, SideEffects
@@ -129,6 +136,8 @@ __all__ = [
     # Repository
     "AsyncRepo",
     "EuphStorageNATS",
+    "InProcessEuphemeralStorage",
+    "TieredEuphemeralStorage",
     "StoredState",
     "WorkflowNotFound",
     # Runner

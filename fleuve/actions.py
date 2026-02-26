@@ -243,6 +243,7 @@ class ActionExecutor(Generic[C, Ae]):
             workflow_type=getattr(
                 event_row, "workflow_type", self._repo._workflow_type
             ),
+            event_type=getattr(event_row, "event_type", ""),
             metadata_=getattr(event_row, "metadata_", None) or {},
         )
         await self.execute_action(event)
@@ -542,6 +543,7 @@ class ActionExecutor(Generic[C, Ae]):
                         workflow_type=getattr(
                             event_row, "workflow_type", self._repo._workflow_type
                         ),
+                        event_type=getattr(event_row, "event_type", ""),
                         metadata_=getattr(event_row, "metadata_", None) or {},
                         reader_name=self._runner_name,
                     )

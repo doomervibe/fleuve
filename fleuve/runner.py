@@ -170,7 +170,9 @@ class SideEffects:
         return delay_exit or action_exit
 
     async def maybe_act_on(self, event: ConsumedEvent):
-        if isinstance(event.event, EvActionCancel):
+        if event.event_type == "action_cancel" or (
+            not event.event_type and isinstance(event.event, EvActionCancel)
+        ):
             await self.action_executor.cancel_workflow_actions(
                 event.workflow_id,
                 event_numbers=event.event.event_numbers,
@@ -183,7 +185,6 @@ class SideEffects:
                 event_version=event.event_no,
             )
         if self.action_executor.to_be_act_on(event):
-            # ActionExecutor handles idempotency, retries, and recovery
             await self.action_executor.execute_action(event)
 
 
@@ -224,6 +225,7 @@ class WorkflowsRunner:
         # This eliminates database queries for every event
         self._subscription_cache: dict[str, list[CachedSubscription]] = {}
         self._cache_initialized = False
+        self._has_tag_subscriptions = False
 
     async def __aenter__(self):
         """Async context manager entry: start side effects, stream reader, and optional external message consumer."""
@@ -287,9 +289,16 @@ class WorkflowsRunner:
                 count += 1
 
         self._cache_initialized = True
+        self._has_tag_subscriptions = any(
+            sub.tags or sub.tags_all
+            for subs in self._subscription_cache.values()
+            for sub in subs
+        )
+        if hasattr(self.stream, "fetch_metadata"):
+            self.stream.fetch_metadata = self._has_tag_subscriptions
         logger.info(
             f"Loaded {count} subscriptions for {len(self._subscription_cache)} workflows "
-            f"into cache"
+            f"into cache (tag filtering: {self._has_tag_subscriptions})"
         )
 
     async def run(self):
@@ -320,10 +329,10 @@ class WorkflowsRunner:
                 # Process commands and update subscription cache
                 workflow_ids = await self.workflows_to_notify(event)
 
-                async def process_and_update_cache(workflow_id: str):
+                async def process_and_update_cache(workflow_id: str, _cmd: Any = cmd):
                     """Process command and update cache with new subscriptions."""
                     result = await self.repo.process_command(
-                        workflow_id, self.workflow_type.event_to_cmd(event)
+                        workflow_id, _cmd
                     )
                     # Update cache if command was successful
                     if isinstance(result, tuple):  # Success: (StoredState, events)
@@ -388,11 +397,12 @@ class WorkflowsRunner:
         out = set[str]()
 
         if event.workflow_type == self.workflow_type.name():
-            if isinstance(event.event, EvDirectMessage):
-                out.add(event.event.target_workflow_id)
-            elif isinstance(event.event, EvDelayComplete):
-                # EvDelayComplete events should notify the workflow that was delayed (itself)
+            if event.event_type == "delay_complete" or (
+                not event.event_type and isinstance(event.event, EvDelayComplete)
+            ):
                 out.add(event.workflow_id)
+            elif isinstance(event.event, EvDirectMessage):
+                out.add(event.event.target_workflow_id)
 
         for sub in await self.find_subscriptions(event):
             out.add(sub)
@@ -411,7 +421,7 @@ class WorkflowsRunner:
         Workflow tags are read directly from event metadata (injected at creation time)
         for maximum performance - no database queries needed.
         """
-        event_type = getattr(event.event, "type", None)
+        event_type = event.event_type or getattr(event.event, "type", None)
         if event_type is None:
             return []
 
@@ -450,7 +460,7 @@ class WorkflowsRunner:
 
         This is used when the cache is not initialized or during testing.
         """
-        event_type = getattr(event.event, "type", None)
+        event_type = event.event_type or getattr(event.event, "type", None)
         if event_type is None:
             return []
 
@@ -548,6 +558,12 @@ class WorkflowsRunner:
                     )
                 )
             self._subscription_cache[workflow_id] = cached_subs
+            if not self._has_tag_subscriptions and any(
+                s.tags or s.tags_all for s in cached_subs
+            ):
+                self._has_tag_subscriptions = True
+                if hasattr(self.stream, "fetch_metadata"):
+                    self.stream.fetch_metadata = True
             logger.debug(
                 f"Updated subscription cache for workflow {workflow_id}: "
                 f"{len(subscriptions)} subscriptions"

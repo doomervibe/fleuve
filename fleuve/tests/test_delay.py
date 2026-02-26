@@ -1,5 +1,5 @@
 """
-Unit tests for les.delay module.
+Unit tests for  fleuve.delay module.
 """
 
 import asyncio

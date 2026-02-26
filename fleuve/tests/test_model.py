@@ -1,5 +1,5 @@
 """
-Unit tests for les.model module.
+Unit tests for fleuve.model module.
 """
 
 import datetime

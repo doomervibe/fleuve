@@ -46,7 +46,13 @@ from fleuve.postgres import (
     Subscription,
 )
 from fleuve.reconciliation import ReconciliationService
-from fleuve.repo import AsyncRepo, EuphStorageNATS, SyncDbHandler
+from fleuve.repo import (
+    AsyncRepo,
+    EuphStorageNATS,
+    InProcessEuphemeralStorage,
+    SyncDbHandler,
+    TieredEuphemeralStorage,
+)
 from fleuve.runner import WorkflowsRunner
 from fleuve.tracing import FleuveTracer
 from fleuve.truncation import TruncationService
@@ -59,7 +65,7 @@ class WorkflowRunnerResources:
     repo: AsyncRepo
     runner: WorkflowsRunner
     session_maker: async_sessionmaker[AsyncSession]
-    ephemeral_storage: EuphStorageNATS
+    ephemeral_storage: TieredEuphemeralStorage | EuphStorageNATS
     engine: AsyncEngine
     nc: NATS
     outbox_publisher: "JetStreamPublisher | None" = None
@@ -105,6 +111,8 @@ async def create_workflow_runner(
     truncation_batch_size: int = 1000,
     truncation_check_interval: timedelta = timedelta(hours=1),
     enable_otel: bool = False,
+    max_cache_size: int = 10_000,
+    trust_cache: bool = False,
     **runner_kwargs: Any,
 ):
     """Create a workflow runner with all necessary infrastructure.
@@ -143,6 +151,8 @@ async def create_workflow_runner(
         truncation_min_retention: Minimum age before events can be truncated (default: 7 days)
         truncation_batch_size: Max events to delete per workflow per cycle (default: 1000)
         truncation_check_interval: How often the truncation loop runs (default: 1 hour)
+        max_cache_size: Maximum number of workflow states to keep in the in-process LRU cache (default: 10000)
+        trust_cache: Skip DB version check when ephemeral cache has state. Safe when runner is the sole writer for its partition (default: False)
         **runner_kwargs: Additional kwargs to pass to make_runner_from_config
 
     Yields:
@@ -192,8 +202,10 @@ async def create_workflow_runner(
     await nc.connect(nats_url)
 
     try:
-        # Create ephemeral storage for workflow state
-        ephemeral_storage = EuphStorageNATS(nc, nats_bucket, state_type)
+        # Create tiered ephemeral storage: L1 in-process LRU + L2 NATS KV
+        l1 = InProcessEuphemeralStorage(max_size=max_cache_size)
+        l2 = EuphStorageNATS(nc, nats_bucket, state_type)
+        ephemeral_storage = TieredEuphemeralStorage(l1=l1, l2=l2)
         await ephemeral_storage.__aenter__()
 
         try:
@@ -215,6 +227,7 @@ async def create_workflow_runner(
                 snapshot_interval=snapshot_interval,
                 db_delay_schedule_model=db_delay_schedule_model,
                 tracer=tracer,
+                trust_cache=trust_cache,
             )
 
             # Create OutboxPublisher if JetStream enabled

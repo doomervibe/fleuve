@@ -1,5 +1,5 @@
 """
-Unit tests for les.actions module.
+Unit tests for fleuve.actions module.
 """
 
 import asyncio

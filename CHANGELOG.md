@@ -8,7 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial public release preparation
+- **Command Gateway** (`FleuveCommandGateway`): HTTP API for workflow commands (create, process, pause, resume, cancel, retry failed action)
+- **Lifecycle Management**: `EvSystemPause`, `EvSystemResume`, `EvSystemCancel`; `StateBase.lifecycle`; `AsyncRepo.pause_workflow`, `resume_workflow`, `cancel_workflow`
+- **Workflow Versioning**: `schema_version` on StoredEvent, `Workflow.upcast()` for schema evolution
+- **Dead Letter Queue**: `ActionExecutor.retry_failed_action`, POST retry endpoint, `on_action_failed` callback
+- **OpenTelemetry Tracing**: `FleuveTracer`, optional instrumentation for process_command, load_state, execute_action, Readers
+- **Snapshots & Event Truncation**: Automatic state snapshots at configurable intervals; `TruncationService` for safe event deletion
+- **Event Replay & Simulate**: State reconstruction in UI API; POST `/api/workflows/{id}/replay` and `/simulate` endpoints
+- **Fleuve UI Command Gateway**: Mount command gateway in UI backend via `repos` and `command_parsers` in `create_app`
 
 ## [0.1.0] - 2026-01-19
 

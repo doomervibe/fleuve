@@ -343,30 +343,38 @@ class JetStreamConsumer:
             # No messages available - this is normal
             return
 
+    def _get_body_validator(self):
+        """Build a validator closure for the event model type."""
+        if not hasattr(self, "_cached_body_validator"):
+            if hasattr(self._event_model_type, "__table__"):
+                body_col = self._event_model_type.__table__.c["body"]  # type: ignore[union-attr]
+                self._cached_body_validator = body_col.type._adapter.validate_python
+            else:
+                self._cached_body_validator = self._event_model_type.model_validate
+        return self._cached_body_validator
+
     def _parse_message(self, msg):
-        """Parse NATS message into ConsumedEvent.
+        """Parse NATS message into ConsumedEvent with lazy body validation.
 
         Args:
             msg: NATS message object
 
         Returns:
-            ConsumedEvent instance
+            ConsumedEvent instance with deferred body validation
         """
         from fleuve.stream import ConsumedEvent
 
         headers = msg.headers or {}
         data = json.loads(msg.data.decode())
 
-        # Parse event body
-        event = self._event_model_type.model_validate(data)
-
-        # Extract metadata from both headers and data
         metadata_ = data.get("metadata_", {})
+        validator = self._get_body_validator()
 
         return ConsumedEvent(
             workflow_id=headers.get("workflow_id") or "",
             event_no=int(headers.get("workflow_version") or 0),
-            event=event,
+            _raw_body=data,
+            _body_validator=validator,
             global_id=int(headers.get("global_id") or 0),
             at=(
                 datetime.fromisoformat(data.get("at"))
@@ -374,5 +382,6 @@ class JetStreamConsumer:
                 else datetime.now()
             ),
             workflow_type=headers.get("workflow_type") or self._workflow_type,
+            event_type=headers.get("event_type") or "",
             metadata_=metadata_,
         )

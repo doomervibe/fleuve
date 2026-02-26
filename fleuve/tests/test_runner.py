@@ -1,5 +1,5 @@
 """
-Unit tests for les.runner module.
+Unit tests for fleuve.runner module.
 """
 
 import asyncio

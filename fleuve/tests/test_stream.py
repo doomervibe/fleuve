@@ -1,5 +1,5 @@
 """
-Unit tests for les.stream module.
+Unit tests for fleuve.stream module.
 """
 
 import asyncio
@@ -89,8 +89,8 @@ class TestConsumedEvent:
         assert event.global_id == 100
         assert event.workflow_type == "test_workflow"
 
-    def test_consumed_event_is_frozen(self):
-        """Test that ConsumedEvent is immutable."""
+    def test_consumed_event_has_event_type(self):
+        """Test that ConsumedEvent stores event_type string."""
         event = ConsumedEvent(
             workflow_id="wf-1",
             event_no=5,
@@ -98,9 +98,158 @@ class TestConsumedEvent:
             global_id=100,
             at=datetime.datetime.now(datetime.timezone.utc),
             workflow_type="test_workflow",
+            event_type="order.placed",
         )
-        with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
-            event.workflow_id = "wf-2"
+        assert event.event_type == "order.placed"
+
+    def test_consumed_event_lazy_body(self):
+        """Test that ConsumedEvent lazily validates the body."""
+        call_count = 0
+
+        def validator(raw):
+            nonlocal call_count
+            call_count += 1
+            return {"validated": True, **raw}
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=5,
+            global_id=100,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+            event_type="test_event",
+            _raw_body={"type": "test"},
+            _body_validator=validator,
+        )
+        assert call_count == 0
+        body = event.event
+        assert call_count == 1
+        assert body["validated"] is True
+        # Second access should not re-validate
+        _ = event.event
+        assert call_count == 1
+
+    def test_lazy_body_clears_raw_after_validation(self):
+        """After first .event access, _raw_body and _body_validator are cleared."""
+
+        def validator(raw):
+            return {"validated": True}
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test",
+            _raw_body={"type": "test"},
+            _body_validator=validator,
+        )
+        _ = event.event
+        assert event._raw_body is None
+        assert event._body_validator is None
+
+    def test_lazy_body_handles_json_string(self):
+        """When _raw_body is a JSON string (e.g. from aiosqlite), it gets parsed."""
+        import json
+
+        raw_dict = {"type": "test", "value": 42}
+
+        def validator(raw):
+            assert isinstance(raw, dict)
+            return raw
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test",
+            _raw_body=json.dumps(raw_dict),
+            _body_validator=validator,
+        )
+        result = event.event
+        assert result == raw_dict
+
+    def test_eager_event_passthrough(self):
+        """When constructed with event= directly, .event returns it without validation."""
+        sentinel = {"already": "validated"}
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test",
+            event=sentinel,
+        )
+        assert event.event is sentinel
+
+    def test_event_returns_none_without_body_or_event(self):
+        """ConsumedEvent with neither event= nor _raw_body returns None."""
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test",
+        )
+        assert event.event is None
+
+    def test_agg_id_alias(self):
+        """agg_id property returns workflow_id."""
+        event = ConsumedEvent(
+            workflow_id="wf-123",
+            event_no=1,
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test",
+        )
+        assert event.agg_id == "wf-123"
+
+    def test_repr_does_not_trigger_validation(self):
+        """repr() should not cause lazy body validation."""
+        call_count = 0
+
+        def validator(raw):
+            nonlocal call_count
+            call_count += 1
+            return raw
+
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=5,
+            global_id=100,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test_workflow",
+            event_type="order.placed",
+            _raw_body={"type": "test"},
+            _body_validator=validator,
+        )
+        r = repr(event)
+        assert "wf-1" in r
+        assert "order.placed" in r
+        assert call_count == 0
+
+    def test_metadata_defaults_to_empty_dict(self):
+        """metadata_ defaults to {} when not provided."""
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test",
+        )
+        assert event.metadata_ == {}
+
+    def test_event_type_defaults_to_empty_string(self):
+        """event_type defaults to empty string when not provided."""
+        event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            global_id=1,
+            at=datetime.datetime.now(datetime.timezone.utc),
+            workflow_type="test",
+        )
+        assert event.event_type == ""
 
 
 class TestReader:

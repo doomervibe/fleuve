@@ -1,5 +1,7 @@
 import json
+import pickle
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any, Generic, Type, TypeVar, cast
 from uuid import uuid4
@@ -97,7 +99,7 @@ class EuphStorageNATS(EuphemeralStorage[S, E]):
 
     async def put_state(self, new: StoredState[S]):
         assert self._bucket
-        await self._bucket.put(str(new.id), new.model_dump_json().encode())
+        await self._bucket.put(str(new.id), pickle.dumps(new))
 
     async def get_state(self, workflow_id: str) -> StoredState[S] | None:
         assert self._bucket
@@ -106,7 +108,7 @@ class EuphStorageNATS(EuphemeralStorage[S, E]):
         except KeyNotFoundError:
             return None
         assert entry.value is not None
-        return StoredState[self._s].model_validate_json(entry.value)
+        return pickle.loads(entry.value)
 
     async def remove_state(self, workflow_id: str):
         assert self._bucket
@@ -114,6 +116,85 @@ class EuphStorageNATS(EuphemeralStorage[S, E]):
             await self._bucket.delete(str(workflow_id))
         except KeyNotFoundError:
             return
+
+
+class InProcessEuphemeralStorage(EuphemeralStorage[S, E]):
+    """In-process LRU cache for workflow state.
+
+    Holds hydrated StoredState objects in a bounded OrderedDict.
+    On cache hit, returns the Python object directly with zero
+    serialization/deserialization overhead. Works well with partitioned
+    runners where each runner handles a fixed subset of workflow IDs.
+    """
+
+    def __init__(self, max_size: int = 10_000) -> None:
+        self._cache: OrderedDict[str, StoredState[S]] = OrderedDict()
+        self._max_size = max_size
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        self._cache.clear()
+        return False
+
+    async def get_state(self, workflow_id: str) -> StoredState[S] | None:
+        state = self._cache.get(workflow_id)
+        if state is not None:
+            self._cache.move_to_end(workflow_id)
+        return state
+
+    async def put_state(self, new: StoredState[S]):
+        self._cache[new.id] = new
+        self._cache.move_to_end(new.id)
+        if len(self._cache) > self._max_size:
+            self._cache.popitem(last=False)
+
+    async def remove_state(self, workflow_id: str):
+        self._cache.pop(workflow_id, None)
+
+
+class TieredEuphemeralStorage(EuphemeralStorage[S, E]):
+    """Two-tier ephemeral storage: L1 in-process cache + L2 NATS KV.
+
+    ``get_state`` tries L1 first (zero cost), then L2 (pickle + network).
+    ``put_state`` writes to both tiers so L1 is always warm after a write.
+    """
+
+    def __init__(
+        self,
+        l1: InProcessEuphemeralStorage,
+        l2: EuphStorageNATS,
+    ) -> None:
+        self._l1 = l1
+        self._l2: EuphStorageNATS[Any, Any] = l2
+
+    async def __aenter__(self) -> Self:
+        await self._l1.__aenter__()
+        await self._l2.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        r1 = await self._l1.__aexit__(exc_type, exc, tb)
+        r2 = await self._l2.__aexit__(exc_type, exc, tb)
+        return r1 or r2
+
+    async def get_state(self, workflow_id: str) -> StoredState[S] | None:
+        state = await self._l1.get_state(workflow_id)
+        if state is not None:
+            return state
+        state = await self._l2.get_state(workflow_id)
+        if state is not None:
+            await self._l1.put_state(state)
+        return state
+
+    async def put_state(self, new: StoredState[S]):
+        await self._l1.put_state(new)
+        await self._l2.put_state(new)
+
+    async def remove_state(self, workflow_id: str):
+        await self._l1.remove_state(workflow_id)
+        await self._l2.remove_state(workflow_id)
 
 
 class WorkflowNotFound(Exception):
@@ -152,12 +233,14 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         snapshot_interval: int = 0,
         db_delay_schedule_model: Type[DelaySchedule] | None = None,
         tracer: Any = None,
+        trust_cache: bool = False,
     ) -> None:
         self._workflow_type = model.name()
         self._db_delay_schedule_model = db_delay_schedule_model
         self._tracer = tracer or _NoopTracer()
         self._uuid = uuid4
         self._es = es
+        self._trust_cache = trust_cache
         self._session_maker: async_sessionmaker[AsyncSession] = session_maker
         self.model = model
         self.db_event_model = db_event_model
@@ -268,6 +351,8 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     async def _handle_subscriptions(
         self, old_state: S | None, new_state: S, s: AsyncSession, workflow_id: str
     ):
+        if old_state is not None and old_state.subscriptions is new_state.subscriptions:
+            return
         if (old_state is None and new_state.subscriptions) or (
             old_state and old_state.subscriptions != new_state.subscriptions
         ):
@@ -319,11 +404,14 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     ):
         if not self.db_external_sub_model:
             return
-        external_subs = getattr(new_state, "external_subscriptions", []) or []
+        old_ext = getattr(old_state, "external_subscriptions", None) if old_state else None
+        new_ext = getattr(new_state, "external_subscriptions", None)
+        if old_ext is not None and old_ext is new_ext:
+            return
+        external_subs = new_ext or []
         if (old_state is None and external_subs) or (
             old_state
-            and (getattr(old_state, "external_subscriptions", []) or [])
-            != external_subs
+            and (old_ext or []) != external_subs
         ):
             c = await s.execute(
                 select(self.db_external_sub_model).where(
@@ -671,6 +759,8 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     async def get_current_state(self, s: AsyncSession, id: str) -> StoredState[S]:
         state: StoredState[S] | None = await self._es.get_state(id)
         if state is not None:
+            if self._trust_cache:
+                return state
             last_event_no = await s.scalar(
                 select(self.db_event_model.workflow_version)
                 .where(self.db_event_model.workflow_id == id)

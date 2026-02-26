@@ -1,5 +1,5 @@
 """
-Pytest configuration and shared fixtures for les framework tests.
+Pytest configuration and shared fixtures for fleuve framework tests.
 """
 
 import asyncio
