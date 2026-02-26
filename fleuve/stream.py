@@ -137,6 +137,7 @@ class Reader(Generic[T]):
         self.offset_model = offset_model
         self._stop_at_offset: int | None = None
         self.fetch_metadata: bool = True
+        self.committed_offset: int | None = None
 
     async def __aenter__(self):
         self._bg_checkpoint_marking_job = asyncio.create_task(
@@ -268,7 +269,11 @@ class Reader(Generic[T]):
             )
 
     async def _mark_horizon(self):
-        last_num = self.last_read_event_g_id
+        last_num = (
+            self.committed_offset
+            if self.committed_offset is not None
+            else self.last_read_event_g_id
+        )
         if last_num is None:
             return
 

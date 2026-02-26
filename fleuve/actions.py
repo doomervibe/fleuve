@@ -56,6 +56,8 @@ class ActionExecutor(Generic[C, Ae]):
         metrics: Any = None,
         tracer: Any = None,
         runner_name: str | None = None,
+        max_concurrent_actions: int | None = None,
+        max_concurrent_actions_per_workflow: int | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._adapter = adapter
@@ -72,6 +74,13 @@ class ActionExecutor(Generic[C, Ae]):
         self._running_actions: dict[tuple[str, int], asyncio.Task] = {}
         self._recovery_task: asyncio.Task | None = None
         self._running = False
+        self._global_semaphore: asyncio.Semaphore | None = (
+            asyncio.Semaphore(max_concurrent_actions)
+            if max_concurrent_actions
+            else None
+        )
+        self._max_concurrent_per_workflow = max_concurrent_actions_per_workflow
+        self._workflow_semaphores: dict[str, asyncio.Semaphore] = {}
 
     def to_be_act_on(self, event: Any) -> bool:
         return self._adapter.to_be_act_on(event)
@@ -249,19 +258,46 @@ class ActionExecutor(Generic[C, Ae]):
         await self.execute_action(event)
         return True
 
+    def _get_workflow_semaphore(self, workflow_id: str) -> asyncio.Semaphore | None:
+        if not self._max_concurrent_per_workflow:
+            return None
+        sem = self._workflow_semaphores.get(workflow_id)
+        if sem is None:
+            sem = asyncio.Semaphore(self._max_concurrent_per_workflow)
+            self._workflow_semaphores[workflow_id] = sem
+        return sem
+
     async def _run_action_with_retry(self, event: ConsumedEvent) -> None:
-        """Run action with retry logic and checkpoint support."""
+        """Run action with retry logic and checkpoint support.
+
+        Acquires global and per-workflow concurrency slots before executing.
+        Tasks are created immediately (for dedup tracking) but actual work
+        waits until a slot is available.
+        """
         workflow_id = event.agg_id
         event_number = event.event_no
 
-        with self._tracer.span(
-            "execute_action",
-            {
-                "fleuve.workflow_id": workflow_id,
-                "fleuve.event_number": event_number,
-            },
-        ):
-            await self._run_action_with_retry_impl(event)
+        if self._global_semaphore:
+            await self._global_semaphore.acquire()
+        try:
+            wf_sem = self._get_workflow_semaphore(workflow_id)
+            if wf_sem:
+                await wf_sem.acquire()
+            try:
+                with self._tracer.span(
+                    "execute_action",
+                    {
+                        "fleuve.workflow_id": workflow_id,
+                        "fleuve.event_number": event_number,
+                    },
+                ):
+                    await self._run_action_with_retry_impl(event)
+            finally:
+                if wf_sem:
+                    wf_sem.release()
+        finally:
+            if self._global_semaphore:
+                self._global_semaphore.release()
 
     async def _run_action_with_retry_impl(self, event: ConsumedEvent) -> None:
         """Internal implementation of action execution with retry."""

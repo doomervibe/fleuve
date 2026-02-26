@@ -30,6 +30,42 @@ from fleuve.stream import ConsumedEvent, Reader, Readers
 logger = logging.getLogger(__name__)
 
 
+class InflightTracker:
+    """Tracks in-flight event processing for safe checkpointing.
+
+    Maintains a sliding window of dispatched event global_ids and their
+    completion status.  The committable offset is the highest *contiguous*
+    completed global_id from the bottom (TCP receive-window semantics).
+    """
+
+    def __init__(self) -> None:
+        self._pending: dict[int, bool] = {}
+        self._committed: int = 0
+
+    def register(self, global_id: int) -> None:
+        self._pending[global_id] = False
+
+    def mark_done(self, global_id: int) -> None:
+        self._pending[global_id] = True
+        self._advance()
+
+    def _advance(self) -> None:
+        for gid in sorted(self._pending):
+            if self._pending[gid]:
+                self._committed = gid
+                del self._pending[gid]
+            else:
+                break
+
+    @property
+    def committable_offset(self) -> int:
+        return self._committed
+
+    @property
+    def size(self) -> int:
+        return len(self._pending)
+
+
 @dataclass
 class CachedSubscription:
     """Cached subscription data for fast matching.
@@ -203,6 +239,7 @@ class WorkflowsRunner:
         db_scaling_operation_model: Type[ScalingOperation] | None = None,
         scaling_check_interval: int = 50,  # Check every N events
         external_message_consumer: Any | None = None,
+        max_inflight: int = 1,
     ) -> None:
         self.name = name or f"{workflow_type.name()}_runner"
         self.wf_id_rule = wf_id_rule
@@ -220,6 +257,7 @@ class WorkflowsRunner:
         self._events_processed = 0
         self._target_offset_for_scaling: int | None = None
         self.external_message_consumer = external_message_consumer
+        self._max_inflight = max(1, max_inflight)
 
         # Subscription cache: workflow_id -> list of CachedSubscription
         # This eliminates database queries for every event
@@ -302,9 +340,9 @@ class WorkflowsRunner:
         )
 
     async def run(self):
-        # this method iterates over all events in the stream and processes them.
-        # Runner can act only on events that belong to its workflow type, but it can notify its workflows
-        # on any event type they are subscribed to.
+        inflight = InflightTracker()
+        pending: set[asyncio.Task] = set()
+        wf_gates: dict[str, asyncio.Event] = {}
 
         async for event in self.stream.iter_events():
             # Check for scaling operation periodically
@@ -321,35 +359,38 @@ class WorkflowsRunner:
                             f"target_offset={target_offset}. Runner will stop at this offset."
                         )
 
-            if self.to_be_act_on(event):
-                await self.se.maybe_act_on(event)
+            # Backpressure: wait until an inflight slot is available
+            while len(pending) >= self._max_inflight:
+                done, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                self._reap_completed(done, inflight)
 
+            # Routing in the main loop preserves event order for predecessor chains
             cmd = self.workflow_type.event_to_cmd(event)
+            workflow_ids: list[str] = []
             if cmd:
-                # Process commands and update subscription cache
                 workflow_ids = await self.workflows_to_notify(event)
 
-                async def process_and_update_cache(workflow_id: str, _cmd: Any = cmd):
-                    """Process command and update cache with new subscriptions."""
-                    result = await self.repo.process_command(
-                        workflow_id, _cmd
-                    )
-                    # Update cache if command was successful
-                    if isinstance(result, tuple):  # Success: (StoredState, events)
-                        stored_state, events = result
-                        await self._update_subscription_cache(
-                            workflow_id, stored_state.state.subscriptions
-                        )
-                    return result
+            # Build per-workflow ordering chain
+            predecessors: dict[str, asyncio.Event | None] = {}
+            completions: dict[str, asyncio.Event] = {}
+            for wf_id in workflow_ids:
+                predecessors[wf_id] = wf_gates.get(wf_id)
+                gate = asyncio.Event()
+                wf_gates[wf_id] = gate
+                completions[wf_id] = gate
 
-                async with asyncio.TaskGroup() as tg:
-                    for id in workflow_ids:
-                        tg.create_task(
-                            process_and_update_cache(id),
-                            name=f"{self.repo.__class__.__name__} processing {cmd} from {event.workflow_id}:{event.event_no}",
-                        )
+            inflight.register(event.global_id)
+            task = asyncio.create_task(
+                self._process_event(
+                    event, cmd, workflow_ids, predecessors, completions
+                ),
+                name=f"process_event:{event.global_id}",
+            )
+            pending.add(task)
 
-            # Check if we've reached target_offset after processing event
+            # Check if we've reached target_offset after reading event
             if (
                 self._target_offset_for_scaling is not None
                 and self.stream.last_read_event_g_id is not None
@@ -360,6 +401,61 @@ class WorkflowsRunner:
                     f"for scaling, stopping gracefully"
                 )
                 break
+
+        # Drain remaining in-flight tasks
+        if pending:
+            done, _ = await asyncio.wait(pending)
+            self._reap_completed(done, inflight)
+
+    async def _process_event(
+        self,
+        event: ConsumedEvent,
+        cmd: Any | None,
+        workflow_ids: list[str],
+        predecessors: dict[str, "asyncio.Event | None"],
+        completions: dict[str, asyncio.Event],
+    ) -> int:
+        """Process a single event and return its global_id."""
+        if self.to_be_act_on(event):
+            await self.se.maybe_act_on(event)
+        if cmd and workflow_ids:
+            async with asyncio.TaskGroup() as tg:
+                for wf_id in workflow_ids:
+                    tg.create_task(
+                        self._ordered_process(
+                            wf_id, cmd, predecessors.get(wf_id), completions[wf_id]
+                        ),
+                        name=f"{self.repo.__class__.__name__} processing {cmd} for {wf_id} from {event.workflow_id}:{event.event_no}",
+                    )
+        return event.global_id
+
+    async def _ordered_process(
+        self,
+        workflow_id: str,
+        cmd: Any,
+        predecessor: "asyncio.Event | None",
+        completion: asyncio.Event,
+    ) -> None:
+        """Await predecessor, run process_command, then signal completion."""
+        try:
+            if predecessor is not None:
+                await predecessor.wait()
+            result = await self.repo.process_command(workflow_id, cmd)
+            if isinstance(result, tuple):
+                stored_state, events = result
+                await self._update_subscription_cache(
+                    workflow_id, stored_state.state.subscriptions
+                )
+        finally:
+            completion.set()
+
+    def _reap_completed(
+        self, done: set[asyncio.Task], inflight: InflightTracker
+    ) -> None:
+        for task in done:
+            global_id = task.result()  # re-raises if the task failed
+            inflight.mark_done(global_id)
+        self.stream.committed_offset = inflight.committable_offset
 
     async def _check_scaling_operation(self) -> int | None:
         """Check for active scaling operation and return target_offset if found."""

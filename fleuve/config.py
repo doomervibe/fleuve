@@ -75,6 +75,7 @@ def make_runner_from_config(
     external_messaging_enabled: bool = False,
     external_stream_name: str | None = None,
     external_message_parser: Any = None,
+    max_inflight: int = 1,
 ) -> WorkflowsRunner:
     """
     Create a single WorkflowsRunner from a WorkflowConfig.
@@ -155,6 +156,7 @@ def make_runner_from_config(
         name=reader_name,
         db_scaling_operation_model=config.db_scaling_operation_model,
         external_message_consumer=external_consumer,
+        max_inflight=max_inflight,
     )
 
 

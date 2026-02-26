@@ -3,12 +3,14 @@ Unit tests for fleuve.runner module.
 """
 
 import asyncio
+import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 
 from fleuve.model import EvActionCancel, EvDelay, EvDelayComplete, EvDirectMessage
-from fleuve.runner import SideEffects, WorkflowsRunner
+from fleuve.runner import InflightTracker, SideEffects, WorkflowsRunner
 from fleuve.stream import ConsumedEvent
 
 
@@ -704,3 +706,359 @@ class TestSubscriptionCache(TestWorkflowsRunner):
 
         # Verify database was not queried (no session maker calls)
         # Since we're using cache, session_maker shouldn't be called
+
+
+# ---------------------------------------------------------------------------
+# InflightTracker tests
+# ---------------------------------------------------------------------------
+
+
+class TestInflightTracker:
+    def test_initial_state(self):
+        t = InflightTracker()
+        assert t.committable_offset == 0
+        assert t.size == 0
+
+    def test_single_event(self):
+        t = InflightTracker()
+        t.register(10)
+        assert t.committable_offset == 0
+        assert t.size == 1
+
+        t.mark_done(10)
+        assert t.committable_offset == 10
+        assert t.size == 0
+
+    def test_contiguous_advance(self):
+        t = InflightTracker()
+        for gid in (1, 2, 3, 4):
+            t.register(gid)
+
+        t.mark_done(1)
+        assert t.committable_offset == 1
+        t.mark_done(2)
+        assert t.committable_offset == 2
+        t.mark_done(3)
+        assert t.committable_offset == 3
+        t.mark_done(4)
+        assert t.committable_offset == 4
+        assert t.size == 0
+
+    def test_gap_blocks_advance(self):
+        t = InflightTracker()
+        for gid in (1, 2, 3, 4, 5):
+            t.register(gid)
+
+        t.mark_done(1)
+        t.mark_done(2)
+        t.mark_done(4)
+        t.mark_done(5)
+        # 3 is still pending -> committable stays at 2
+        assert t.committable_offset == 2
+        assert t.size == 3  # 3, 4, 5 still in _pending (4,5 done but blocked)
+
+        t.mark_done(3)
+        assert t.committable_offset == 5
+        assert t.size == 0
+
+    def test_out_of_order_completion(self):
+        t = InflightTracker()
+        for gid in (10, 20, 30):
+            t.register(gid)
+
+        t.mark_done(30)
+        assert t.committable_offset == 0
+
+        t.mark_done(10)
+        assert t.committable_offset == 10
+
+        t.mark_done(20)
+        assert t.committable_offset == 30
+
+    def test_size_reflects_pending(self):
+        t = InflightTracker()
+        t.register(1)
+        t.register(2)
+        assert t.size == 2
+        t.mark_done(1)
+        assert t.size == 1
+        t.mark_done(2)
+        assert t.size == 0
+
+
+# ---------------------------------------------------------------------------
+# Pipelined runner tests
+# ---------------------------------------------------------------------------
+
+
+def _make_event(
+    global_id: int,
+    workflow_id: str = "wf-1",
+    workflow_type: str = "test_workflow",
+    event_type: str = "test",
+) -> ConsumedEvent:
+    class Ev(BaseModel):
+        type: str = "test"
+
+    return ConsumedEvent(
+        workflow_id=workflow_id,
+        event_no=global_id,
+        event=Ev(),
+        global_id=global_id,
+        at=datetime.datetime.now(),
+        workflow_type=workflow_type,
+        event_type=event_type,
+    )
+
+
+class TestPipelinedRunner:
+    """Tests for the pipelined run() loop with safe checkpointing."""
+
+    @pytest.fixture
+    def mock_repo(self):
+        repo = AsyncMock()
+        repo.process_command = AsyncMock(return_value="rejected")
+        return repo
+
+    @pytest.fixture
+    def mock_readers(self):
+        readers = MagicMock()
+        reader = MagicMock()
+        reader.__aenter__ = AsyncMock(return_value=reader)
+        reader.__aexit__ = AsyncMock(return_value=False)
+        reader.last_read_event_g_id = None
+        reader.committed_offset = None
+        reader.fetch_metadata = True
+        reader.set_stop_at_offset = MagicMock()
+        readers.reader = MagicMock(return_value=reader)
+        return readers
+
+    @pytest.fixture
+    def mock_side_effects(self):
+        se = AsyncMock()
+        se.maybe_act_on = AsyncMock()
+        se.__aenter__ = AsyncMock(return_value=se)
+        se.__aexit__ = AsyncMock(return_value=False)
+        return se
+
+    @pytest.fixture
+    def mock_workflow_type(self):
+        from fleuve.tests.conftest import TestWorkflow
+
+        return TestWorkflow
+
+    def _make_runner(
+        self, mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=1
+    ):
+        wf_type = MagicMock()
+        wf_type.name.return_value = "test_workflow"
+        _DUMMY_CMD = "cmd"
+        wf_type.event_to_cmd = MagicMock(
+            side_effect=lambda e: _DUMMY_CMD if e.workflow_type == "test_workflow" else None
+        )
+
+        runner = WorkflowsRunner(
+            repo=mock_repo,
+            readers=mock_readers,
+            workflow_type=wf_type,
+            session_maker=MagicMock(),
+            db_sub_type=MagicMock(),
+            se=mock_side_effects,
+            max_inflight=max_inflight,
+        )
+        runner._cache_initialized = True
+        runner._has_tag_subscriptions = False
+        runner.workflows_to_notify = AsyncMock(
+            side_effect=lambda e: [e.workflow_id] if e.workflow_type == "test_workflow" else []
+        )
+        return runner
+
+    @pytest.mark.asyncio
+    async def test_sequential_with_max_inflight_1(
+        self, mock_repo, mock_readers, mock_workflow_type, mock_side_effects
+    ):
+        """max_inflight=1 should process events one at a time, like the old sequential loop."""
+        events = [_make_event(i) for i in range(1, 4)]
+
+        async def fake_iter():
+            for e in events:
+                yield e
+
+        reader = mock_readers.reader.return_value
+        reader.iter_events = fake_iter
+
+        runner = self._make_runner(
+            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=1
+        )
+
+        await runner.run()
+
+        assert reader.committed_offset == 3
+
+    @pytest.mark.asyncio
+    async def test_committed_offset_advances_contiguously(
+        self, mock_repo, mock_readers, mock_workflow_type, mock_side_effects
+    ):
+        """With max_inflight > 1, committed_offset should only advance contiguously."""
+        events = [
+            _make_event(1, workflow_id="a"),
+            _make_event(2, workflow_id="b"),
+            _make_event(3, workflow_id="c"),
+        ]
+
+        call_order: list[int] = []
+
+        async def slow_process(wf_id, cmd):
+            gid = {"a": 1, "b": 2, "c": 3}[wf_id]
+            if gid == 1:
+                await asyncio.sleep(0.05)
+            call_order.append(gid)
+            return "rejected"
+
+        mock_repo.process_command = slow_process
+
+        async def fake_iter():
+            for e in events:
+                yield e
+
+        reader = mock_readers.reader.return_value
+        reader.iter_events = fake_iter
+
+        runner = self._make_runner(
+            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=3
+        )
+
+        await runner.run()
+
+        assert reader.committed_offset == 3
+
+    @pytest.mark.asyncio
+    async def test_per_workflow_ordering(
+        self, mock_repo, mock_readers, mock_workflow_type, mock_side_effects
+    ):
+        """Two events targeting the same workflow must be processed in event order."""
+        events = [
+            _make_event(1, workflow_id="wf-same"),
+            _make_event(2, workflow_id="wf-same"),
+        ]
+
+        call_order: list[int] = []
+        call_timestamps: list[float] = []
+
+        async def tracking_process(wf_id, cmd):
+            import time
+
+            gid = 1 if len(call_order) == 0 else 2
+            call_timestamps.append(time.monotonic())
+            if gid == 1:
+                await asyncio.sleep(0.05)
+            call_order.append(gid)
+            return "rejected"
+
+        mock_repo.process_command = tracking_process
+
+        async def fake_iter():
+            for e in events:
+                yield e
+
+        reader = mock_readers.reader.return_value
+        reader.iter_events = fake_iter
+
+        runner = self._make_runner(
+            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=5
+        )
+
+        await runner.run()
+
+        assert call_order == [1, 2], f"Expected [1, 2] but got {call_order}"
+
+    @pytest.mark.asyncio
+    async def test_cross_workflow_concurrency(
+        self, mock_repo, mock_readers, mock_workflow_type, mock_side_effects
+    ):
+        """Events targeting different workflows should run concurrently."""
+        events = [
+            _make_event(1, workflow_id="wf-a"),
+            _make_event(2, workflow_id="wf-b"),
+        ]
+
+        import time
+
+        start_times: dict[str, float] = {}
+
+        async def tracking_process(wf_id, cmd):
+            start_times[wf_id] = time.monotonic()
+            await asyncio.sleep(0.05)
+            return "rejected"
+
+        mock_repo.process_command = tracking_process
+
+        async def fake_iter():
+            for e in events:
+                yield e
+
+        reader = mock_readers.reader.return_value
+        reader.iter_events = fake_iter
+
+        runner = self._make_runner(
+            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=5
+        )
+
+        await runner.run()
+
+        assert "wf-a" in start_times and "wf-b" in start_times
+        gap = abs(start_times["wf-a"] - start_times["wf-b"])
+        assert gap < 0.03, f"Expected concurrent start, but gap was {gap:.3f}s"
+
+    @pytest.mark.asyncio
+    async def test_error_propagation(
+        self, mock_repo, mock_readers, mock_workflow_type, mock_side_effects
+    ):
+        """If a task fails, the error should propagate out of run()."""
+        events = [_make_event(1, workflow_id="wf-fail")]
+
+        async def failing_process(wf_id, cmd):
+            raise RuntimeError("boom")
+
+        mock_repo.process_command = failing_process
+
+        async def fake_iter():
+            for e in events:
+                yield e
+
+        reader = mock_readers.reader.return_value
+        reader.iter_events = fake_iter
+
+        runner = self._make_runner(
+            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=1
+        )
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            await runner.run()
+        assert any(isinstance(e, RuntimeError) for e in exc_info.value.exceptions)
+
+    @pytest.mark.asyncio
+    async def test_no_cmd_events_marked_done_immediately(
+        self, mock_repo, mock_readers, mock_workflow_type, mock_side_effects
+    ):
+        """Events that produce no command should still advance committed_offset."""
+        events = [
+            _make_event(1, workflow_type="other_workflow"),
+            _make_event(2, workflow_type="other_workflow"),
+        ]
+
+        async def fake_iter():
+            for e in events:
+                yield e
+
+        reader = mock_readers.reader.return_value
+        reader.iter_events = fake_iter
+
+        runner = self._make_runner(
+            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=5
+        )
+
+        await runner.run()
+
+        mock_repo.process_command.assert_not_called()
+        assert reader.committed_offset == 2

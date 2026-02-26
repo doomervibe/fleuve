@@ -1042,3 +1042,325 @@ class TestActionExecutor:
 
         ok = await executor.retry_failed_action("nonexistent", 1)
         assert ok is False
+
+
+class TestActionConcurrencyLimits:
+    """Tests for max_concurrent_actions and max_concurrent_actions_per_workflow."""
+
+    @pytest.fixture
+    def mock_repo(self):
+        repo = AsyncMock()
+        repo.process_command = AsyncMock(return_value=None)
+        return repo
+
+    async def _wait_for_executor(self, executor: ActionExecutor) -> None:
+        while True:
+            tasks = list(executor._running_actions.values())
+            if not tasks:
+                break
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_global_concurrency_limit(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Global semaphore caps the number of actions executing at the same time."""
+        from fleuve.tests.conftest import TestEvent
+
+        peak = 0
+        current = 0
+        lock = asyncio.Lock()
+
+        class SlowAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                nonlocal peak, current
+                async with lock:
+                    current += 1
+                    peak = max(peak, current)
+                await asyncio.sleep(0.15)
+                async with lock:
+                    current -= 1
+                if False:
+                    yield  # pragma: no cover
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=SlowAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+            max_concurrent_actions=2,
+        )
+
+        events = [
+            ConsumedEvent(
+                workflow_id=f"wf-{i}",
+                event_no=1,
+                event=TestEvent(value=i),
+                global_id=i,
+                at=datetime.datetime.now(datetime.timezone.utc),
+                workflow_type="test_workflow",
+            )
+            for i in range(5)
+        ]
+
+        for ev in events:
+            await executor.execute_action(ev)
+
+        await self._wait_for_executor(executor)
+
+        assert peak <= 2, f"Peak concurrency was {peak}, expected <= 2"
+        assert current == 0
+
+    @pytest.mark.asyncio
+    async def test_per_workflow_concurrency_limit(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Per-workflow semaphore caps concurrent actions for a single workflow."""
+        from fleuve.tests.conftest import TestEvent
+
+        peak_per_wf: dict[str, int] = {}
+        current_per_wf: dict[str, int] = {}
+        lock = asyncio.Lock()
+
+        class SlowAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                wf_id = event.workflow_id
+                async with lock:
+                    current_per_wf[wf_id] = current_per_wf.get(wf_id, 0) + 1
+                    peak_per_wf[wf_id] = max(
+                        peak_per_wf.get(wf_id, 0), current_per_wf[wf_id]
+                    )
+                await asyncio.sleep(0.15)
+                async with lock:
+                    current_per_wf[wf_id] -= 1
+                if False:
+                    yield  # pragma: no cover
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=SlowAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+            max_concurrent_actions_per_workflow=1,
+        )
+
+        events = [
+            ConsumedEvent(
+                workflow_id="wf-A",
+                event_no=i,
+                event=TestEvent(value=i),
+                global_id=i,
+                at=datetime.datetime.now(datetime.timezone.utc),
+                workflow_type="test_workflow",
+            )
+            for i in range(1, 4)
+        ]
+
+        for ev in events:
+            await executor.execute_action(ev)
+
+        await self._wait_for_executor(executor)
+
+        assert peak_per_wf["wf-A"] <= 1, (
+            f"Peak per-workflow concurrency was {peak_per_wf['wf-A']}, expected <= 1"
+        )
+
+    @pytest.mark.asyncio
+    async def test_per_workflow_allows_cross_workflow_concurrency(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Per-workflow limit does not prevent different workflows from running concurrently."""
+        from fleuve.tests.conftest import TestEvent
+
+        peak = 0
+        current = 0
+        lock = asyncio.Lock()
+
+        class SlowAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                nonlocal peak, current
+                async with lock:
+                    current += 1
+                    peak = max(peak, current)
+                await asyncio.sleep(0.2)
+                async with lock:
+                    current -= 1
+                if False:
+                    yield  # pragma: no cover
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=SlowAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+            max_concurrent_actions_per_workflow=1,
+        )
+
+        events = [
+            ConsumedEvent(
+                workflow_id=f"wf-{i}",
+                event_no=1,
+                event=TestEvent(value=i),
+                global_id=i,
+                at=datetime.datetime.now(datetime.timezone.utc),
+                workflow_type="test_workflow",
+            )
+            for i in range(3)
+        ]
+
+        for ev in events:
+            await executor.execute_action(ev)
+
+        await self._wait_for_executor(executor)
+
+        assert peak >= 2, (
+            f"Expected cross-workflow concurrency >= 2 but got {peak}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_both_limits_combined(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """When both limits are set, the stricter one wins."""
+        from fleuve.tests.conftest import TestEvent
+
+        peak = 0
+        current = 0
+        lock = asyncio.Lock()
+
+        class SlowAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                nonlocal peak, current
+                async with lock:
+                    current += 1
+                    peak = max(peak, current)
+                await asyncio.sleep(0.15)
+                async with lock:
+                    current -= 1
+                if False:
+                    yield  # pragma: no cover
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=SlowAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+            max_concurrent_actions=2,
+            max_concurrent_actions_per_workflow=1,
+        )
+
+        events = [
+            ConsumedEvent(
+                workflow_id=f"wf-{i}",
+                event_no=1,
+                event=TestEvent(value=i),
+                global_id=i,
+                at=datetime.datetime.now(datetime.timezone.utc),
+                workflow_type="test_workflow",
+            )
+            for i in range(5)
+        ]
+
+        for ev in events:
+            await executor.execute_action(ev)
+
+        await self._wait_for_executor(executor)
+
+        assert peak <= 2, f"Peak concurrency was {peak}, expected <= 2 (global limit)"
+
+    @pytest.mark.asyncio
+    async def test_no_limits_is_unbounded(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Default (no limits) allows all actions to run concurrently."""
+        from fleuve.tests.conftest import TestEvent
+
+        peak = 0
+        current = 0
+        lock = asyncio.Lock()
+
+        class SlowAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                nonlocal peak, current
+                async with lock:
+                    current += 1
+                    peak = max(peak, current)
+                await asyncio.sleep(0.15)
+                async with lock:
+                    current -= 1
+                if False:
+                    yield  # pragma: no cover
+
+            def to_be_act_on(self, event):
+                return True
+
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=SlowAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+        )
+
+        events = [
+            ConsumedEvent(
+                workflow_id=f"wf-{i}",
+                event_no=1,
+                event=TestEvent(value=i),
+                global_id=i,
+                at=datetime.datetime.now(datetime.timezone.utc),
+                workflow_type="test_workflow",
+            )
+            for i in range(5)
+        ]
+
+        for ev in events:
+            await executor.execute_action(ev)
+
+        await self._wait_for_executor(executor)
+
+        assert peak >= 4, (
+            f"Expected near-full concurrency (>= 4) but got {peak}"
+        )

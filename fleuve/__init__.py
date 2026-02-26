@@ -38,7 +38,7 @@ from fleuve.repo import (
 )
 
 # Runner and side effects
-from fleuve.runner import WorkflowsRunner, SideEffects
+from fleuve.runner import WorkflowsRunner, SideEffects, InflightTracker
 
 # Configuration
 from fleuve.config import (
@@ -143,6 +143,7 @@ __all__ = [
     # Runner
     "WorkflowsRunner",
     "SideEffects",
+    "InflightTracker",
     # Config
     "WorkflowConfig",
     "make_runner_from_config",
