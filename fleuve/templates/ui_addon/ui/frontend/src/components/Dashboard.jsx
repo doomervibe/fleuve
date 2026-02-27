@@ -27,7 +27,7 @@ function CopyButton({ text, className = '' }) {
   return (
     <button
       onClick={handleCopy}
-      className={`inline-flex items-center gap-1 px-1 py-0 text-xs font-mono text-[#00ff00] hover:text-[#00ffff] border border-[#00ff00] ${className}`}
+      className={`inline-flex items-center gap-1 px-1 py-0 text-xs font-mono text-theme hover:text-theme-accent border border-theme ${className}`}
       title="Copy workflow ID"
     >
       {copied ? '[OK]' : '[CP]'}
@@ -153,15 +153,15 @@ export default function Dashboard() {
       <div className="mb-1">
         <div className="flex items-center justify-between mb-1">
           <div>
-            <h2 className="text-sm font-mono text-[#00ff00] mb-0">$ dashboard</h2>
-            <p className="text-xs font-mono text-[#00ff00] opacity-70">> overview of your fleuve workflows and system metrics</p>
+            <h2 className="text-sm font-mono text-theme mb-0">$ dashboard</h2>
+            <p className="text-xs font-mono text-theme opacity-70">> overview of your fleuve workflows and system metrics</p>
           </div>
           <div className="flex items-center space-x-2">
-            <label className="text-xs font-mono text-[#00ff00]">workflow_type:</label>
+            <label className="text-xs font-mono text-theme">workflow_type:</label>
             <select
               value={selectedWorkflowType}
               onChange={(e) => setSelectedWorkflowType(e.target.value)}
-              className="px-2 py-1 bg-black border border-[#00ff00] text-xs font-mono text-[#00ff00] focus:outline-none focus:border-[#00ffff]"
+              className="px-2 py-1 bg-theme border border-theme text-xs font-mono text-theme focus:outline-none focus:border-theme-accent"
             >
               {workflowTypes.map((type) => (
                 <option key={type} value={type}>
@@ -175,50 +175,50 @@ export default function Dashboard() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-1">
-        <div className="stat-card border-l-2 border-l-[#00ff00]">
+        <div className="stat-card border-l-2 border-l-[var(--fleuve-border)]">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-mono text-[#00ff00] opacity-70 mb-0">total_workflows:</p>
-              <p className="text-lg font-mono text-[#00ff00]">{filteredStats.total_workflows}</p>
+              <p className="text-xs font-mono text-theme opacity-70 mb-0">total_workflows:</p>
+              <p className="text-lg font-mono text-theme">{filteredStats.total_workflows}</p>
             </div>
-            <div className="w-8 h-8 bg-black flex items-center justify-center border border-[#00ff00]">
-              <span className="text-xs font-mono text-[#00ff00]">[W]</span>
+            <div className="w-8 h-8 bg-theme flex items-center justify-center border border-theme">
+              <span className="text-xs font-mono text-theme">[W]</span>
             </div>
           </div>
         </div>
 
-        <div className="stat-card border-l-2 border-l-[#00ff00]">
+        <div className="stat-card border-l-2 border-l-[var(--fleuve-border)]">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-mono text-[#00ff00] opacity-70 mb-0">total_events:</p>
-              <p className="text-lg font-mono text-[#00ff00]">{filteredStats.total_events}</p>
+              <p className="text-xs font-mono text-theme opacity-70 mb-0">total_events:</p>
+              <p className="text-lg font-mono text-theme">{filteredStats.total_events}</p>
             </div>
-            <div className="w-8 h-8 bg-black flex items-center justify-center border border-[#00ff00]">
-              <span className="text-xs font-mono text-[#00ff00]">[E]</span>
+            <div className="w-8 h-8 bg-theme flex items-center justify-center border border-theme">
+              <span className="text-xs font-mono text-theme">[E]</span>
             </div>
           </div>
         </div>
 
-        <div className="stat-card border-l-2 border-l-[#00ff00]">
+        <div className="stat-card border-l-2 border-l-[var(--fleuve-border)]">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-mono text-[#00ff00] opacity-70 mb-0">pending_activities:</p>
-              <p className="text-lg font-mono text-[#00ff00]">{filteredStats.pending_activities}</p>
+              <p className="text-xs font-mono text-theme opacity-70 mb-0">pending_activities:</p>
+              <p className="text-lg font-mono text-theme">{filteredStats.pending_activities}</p>
             </div>
-            <div className="w-8 h-8 bg-black flex items-center justify-center border border-[#00ff00]">
-              <span className="text-xs font-mono text-[#00ff00]">[A]</span>
+            <div className="w-8 h-8 bg-theme flex items-center justify-center border border-theme">
+              <span className="text-xs font-mono text-theme">[A]</span>
             </div>
           </div>
         </div>
 
-        <div className="stat-card border-l-2 border-l-[#00ff00]">
+        <div className="stat-card border-l-2 border-l-[var(--fleuve-border)]">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-mono text-[#00ff00] opacity-70 mb-0">active_delays:</p>
-              <p className="text-lg font-mono text-[#00ff00]">{filteredStats.active_delays}</p>
+              <p className="text-xs font-mono text-theme opacity-70 mb-0">active_delays:</p>
+              <p className="text-lg font-mono text-theme">{filteredStats.active_delays}</p>
             </div>
-            <div className="w-8 h-8 bg-black flex items-center justify-center border border-[#00ff00]">
-              <span className="text-xs font-mono text-[#00ff00]">[T]</span>
+            <div className="w-8 h-8 bg-theme flex items-center justify-center border border-theme">
+              <span className="text-xs font-mono text-theme">[T]</span>
             </div>
           </div>
         </div>
@@ -227,7 +227,7 @@ export default function Dashboard() {
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-1">
         <div className="card chart-card p-2">
-          <h3 className="text-xs font-mono text-[#00ff00] mb-2 flex items-center space-x-1">
+          <h3 className="text-xs font-mono text-theme mb-2 flex items-center space-x-1">
             <span>[*]</span>
             <span>activities_by_status</span>
           </h3>
@@ -252,45 +252,45 @@ export default function Dashboard() {
                   </Pie>
                 <Tooltip 
                   contentStyle={{ 
-                    backgroundColor: '#000000', 
-                    border: '1px solid #00ff00',
+                    backgroundColor: 'var(--fleuve-bg)', 
+                    border: '1px solid var(--fleuve-border)',
                     borderRadius: '0',
-                    color: '#00ff00',
+                    color: 'var(--fleuve-text)',
                     fontFamily: 'Courier New, monospace'
                   }}
-                  itemStyle={{ color: '#00ff00' }}
-                  labelStyle={{ color: '#00ff00' }}
+                  itemStyle={{ color: 'var(--fleuve-text)' }}
+                  labelStyle={{ color: 'var(--fleuve-text)' }}
                 />
                 </PieChart>
               </div>
               <div className="flex-1 min-w-0">
                 <table className="w-full text-xs font-mono">
                   <thead>
-                    <tr className="border-b border-[#00ff00]">
-                      <th className="text-left py-1 text-xs font-mono text-[#00ff00]">status</th>
-                      <th className="text-right py-1 text-xs font-mono text-[#00ff00]">count</th>
-                      <th className="text-right py-1 text-xs font-mono text-[#00ff00]">%</th>
+                    <tr className="border-b border-theme">
+                      <th className="text-left py-1 text-xs font-mono text-theme">status</th>
+                      <th className="text-right py-1 text-xs font-mono text-theme">count</th>
+                      <th className="text-right py-1 text-xs font-mono text-theme">%</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#00ff00]">
+                  <tbody className="divide-y divide-[color:var(--fleuve-border)]">
                     {activitiesByStatusData.map((entry, index) => {
                       const total = activitiesByStatusData.reduce((sum, e) => sum + e.value, 0);
                       const percent = ((entry.value / total) * 100).toFixed(1);
                       return (
-                        <tr key={index} className="hover:bg-[#001100]">
-                          <td className="py-1 text-[#00ff00]">
+                        <tr key={index} className="hover:bg-[var(--fleuve-border-hover)]">
+                          <td className="py-1 text-theme">
                             <div className="flex items-center gap-1">
-                              <span className="text-[#00ff00]">[</span>
+                              <span className="text-theme">[</span>
                               <div 
-                                className="w-2 h-2 border border-[#00ff00]" 
+                                className="w-2 h-2 border border-theme" 
                                 style={{ backgroundColor: COLORS[index % COLORS.length] }}
                               />
-                              <span className="text-[#00ff00]">]</span>
+                              <span className="text-theme">]</span>
                               <span>{entry.name}</span>
                             </div>
                           </td>
-                          <td className="py-1 text-right text-[#00ff00]">{entry.value}</td>
-                          <td className="py-1 text-right text-[#00ff00] opacity-70">{percent}%</td>
+                          <td className="py-1 text-right text-theme">{entry.value}</td>
+                          <td className="py-1 text-right text-theme opacity-70">{percent}%</td>
                         </tr>
                       );
                     })}
@@ -299,12 +299,12 @@ export default function Dashboard() {
               </div>
             </div>
           ) : (
-            <p className="text-[#00ff00] opacity-50 text-center py-4 font-mono text-xs">> no data available</p>
+            <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">> no data available</p>
           )}
         </div>
 
         <div className="card chart-card p-2">
-          <h3 className="text-xs font-mono text-[#00ff00] mb-2 flex items-center space-x-1">
+          <h3 className="text-xs font-mono text-theme mb-2 flex items-center space-x-1">
             <span>[*]</span>
             <span>top_events_by_type</span>
           </h3>
@@ -329,33 +329,33 @@ export default function Dashboard() {
                   </Pie>
                 <Tooltip 
                   contentStyle={{ 
-                    backgroundColor: '#000000', 
-                    border: '1px solid #00ff00',
+                    backgroundColor: 'var(--fleuve-bg)', 
+                    border: '1px solid var(--fleuve-border)',
                     borderRadius: '0',
-                    color: '#00ff00',
+                    color: 'var(--fleuve-text)',
                     fontFamily: 'Courier New, monospace'
                   }}
-                  itemStyle={{ color: '#00ff00' }}
-                  labelStyle={{ color: '#00ff00' }}
+                  itemStyle={{ color: 'var(--fleuve-text)' }}
+                  labelStyle={{ color: 'var(--fleuve-text)' }}
                 />
                 </PieChart>
               </div>
               <div className="flex-1 min-w-0">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-[#2a2a2a]">
-                      <th className="text-left py-2 text-xs font-semibold text-gray-300 uppercase tracking-wider">event type</th>
-                      <th className="text-right py-2 text-xs font-semibold text-gray-300 uppercase tracking-wider">count</th>
-                      <th className="text-right py-2 text-xs font-semibold text-gray-300 uppercase tracking-wider">%</th>
+                    <tr className="border-b border-theme">
+                      <th className="text-left py-2 text-xs font-semibold text-theme uppercase tracking-wider">event type</th>
+                      <th className="text-right py-2 text-xs font-semibold text-theme uppercase tracking-wider">count</th>
+                      <th className="text-right py-2 text-xs font-semibold text-theme uppercase tracking-wider">%</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#2a2a2a]">
+                  <tbody className="divide-y divide-[color:var(--fleuve-border)]">
                     {eventsByTypeData.map((entry, index) => {
                       const total = eventsByTypeData.reduce((sum, e) => sum + e.value, 0);
                       const percent = ((entry.value / total) * 100).toFixed(1);
                       return (
-                        <tr key={index} className="hover:bg-[#242424] transition-colors">
-                          <td className="py-2 text-gray-200">
+                        <tr key={index} className="hover:bg-[var(--fleuve-border-hover)] transition-colors">
+                          <td className="py-2 text-theme">
                             <div className="flex items-center gap-2">
                               <div 
                                 className="w-3 h-3 rounded-sm" 
@@ -364,8 +364,8 @@ export default function Dashboard() {
                               <span className="truncate">{entry.name}</span>
                             </div>
                           </td>
-                          <td className="py-2 text-right text-gray-200 font-medium">{entry.value}</td>
-                          <td className="py-2 text-right text-gray-400">{percent}%</td>
+                          <td className="py-2 text-right text-theme font-medium">{entry.value}</td>
+                          <td className="py-2 text-right text-theme opacity-70">{percent}%</td>
                         </tr>
                       );
                     })}
@@ -374,7 +374,7 @@ export default function Dashboard() {
               </div>
             </div>
           ) : (
-            <p className="text-[#00ff00] opacity-50 text-center py-4 font-mono text-xs">> no data available</p>
+            <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">> no data available</p>
           )}
         </div>
       </div>
@@ -382,47 +382,47 @@ export default function Dashboard() {
       {/* Recent Workflows */}
       <div className="card p-2">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xs font-mono text-[#00ff00] flex items-center space-x-1">
+          <h3 className="text-xs font-mono text-theme flex items-center space-x-1">
             <span>[W]</span>
             <span>recent_workflows</span>
           </h3>
           <Link
             to="/workflows"
-            className="text-xs font-mono text-[#00ff00] hover:text-[#00ffff] border border-[#00ff00] px-1 py-0"
+            className="text-xs font-mono text-theme hover:text-theme-accent border border-theme px-1 py-0"
           >
             view_all ->
           </Link>
         </div>
         {workflows.length > 0 ? (
-          <div className="overflow-x-auto border border-[#00ff00]">
-            <table className="min-w-full divide-y divide-[#00ff00] font-mono text-xs">
-              <thead className="bg-black">
+          <div className="overflow-x-auto border border-theme">
+            <table className="min-w-full divide-y divide-[color:var(--fleuve-border)] font-mono text-xs">
+              <thead className="bg-theme">
                 <tr>
-                  <th className="px-2 py-1 text-left text-xs font-mono text-[#00ff00] border-b border-[#00ff00]">
+                  <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
                     workflow_id
                   </th>
-                  <th className="px-2 py-1 text-left text-xs font-mono text-[#00ff00] border-b border-[#00ff00]">
+                  <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
                     type
                   </th>
-                  <th className="px-2 py-1 text-left text-xs font-mono text-[#00ff00] border-b border-[#00ff00]">
+                  <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
                     version
                   </th>
-                  <th className="px-2 py-1 text-left text-xs font-mono text-[#00ff00] border-b border-[#00ff00]">
+                  <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
                     updated
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-black divide-y divide-[#00ff00]">
+              <tbody className="bg-theme divide-y divide-[color:var(--fleuve-border)]">
                 {workflows.map((workflow) => (
                   <tr
                     key={workflow.workflow_id}
-                    className="hover:bg-[#001100] cursor-pointer"
+                    className="hover:bg-[var(--fleuve-border-hover)] cursor-pointer"
                   >
                     <td className="px-2 py-1 whitespace-nowrap">
                       <div className="flex items-center gap-1">
                         <Link
                           to={`/workflows/${workflow.workflow_id}`}
-                          className="text-xs font-mono text-[#00ff00] hover:text-[#00ffff]"
+                          className="text-xs font-mono text-theme hover:text-theme-accent"
                         >
                           {workflow.workflow_id.substring(0, 8)}...
                         </Link>
@@ -430,14 +430,14 @@ export default function Dashboard() {
                       </div>
                     </td>
                     <td className="px-2 py-1 whitespace-nowrap">
-                      <span className="inline-flex items-center px-1 py-0 text-xs font-mono bg-black text-[#00ff00] border border-[#00ff00]">
+                      <span className="inline-flex items-center px-1 py-0 text-xs font-mono bg-theme text-theme border border-theme">
                         {workflow.workflow_type}
                       </span>
                     </td>
-                    <td className="px-2 py-1 whitespace-nowrap text-xs font-mono text-[#00ff00]">
+                    <td className="px-2 py-1 whitespace-nowrap text-xs font-mono text-theme">
                       {workflow.version}
                     </td>
-                    <td className="px-2 py-1 whitespace-nowrap text-xs font-mono text-[#00ff00] opacity-70">
+                    <td className="px-2 py-1 whitespace-nowrap text-xs font-mono text-theme opacity-70">
                       {workflow.updated_at
                         ? new Date(workflow.updated_at).toLocaleString()
                         : 'N/A'}
@@ -449,7 +449,7 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="text-center py-4">
-            <p className="text-[#00ff00] opacity-50 font-mono text-xs">> no workflows found</p>
+            <p className="text-theme opacity-50 font-mono text-xs">> no workflows found</p>
           </div>
         )}
       </div>

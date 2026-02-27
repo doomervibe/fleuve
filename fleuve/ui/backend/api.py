@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select, distinct, func, and_, or_
+from sqlalchemy import select, distinct, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fleuve.postgres import StoredEvent, Activity, DelaySchedule, Subscription

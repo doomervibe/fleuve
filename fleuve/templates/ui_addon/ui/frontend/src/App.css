@@ -1,0 +1,504 @@
+/* fleuve-go style: zsh terminal look — black + white + accent colors, no grey, no borders */
+/* Variables are in index.css */
+
+.logo,
+.nav button,
+.header-right .status,
+.dashboard-header h2,
+.list-header h2,
+.filter-select,
+.refresh-btn,
+.back-btn,
+.stat-label,
+.workflow-card-footer,
+.tabs button,
+.empty-state,
+.empty-state .hint,
+.empty-state pre,
+.loading,
+.error,
+.error button,
+details summary,
+.data-table th {
+  text-transform: lowercase;
+}
+
+/* Header — prompt line */
+.header {
+  background: var(--bg);
+  padding: 0.5rem 1rem;
+}
+
+.header-content {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.header-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.logo-link {
+  text-decoration: none;
+}
+
+.logo {
+  font-size: 13px;
+  font-weight: 400;
+  margin: 0;
+  color: var(--fg);
+}
+
+.logo::before {
+  content: '% ';
+  color: var(--green);
+  margin-right: 0;
+}
+
+.nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.nav button,
+.nav a {
+  background: none;
+  color: var(--muted);
+  padding: 0.2rem 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font);
+  border: none;
+  outline: none;
+  text-decoration: none;
+}
+
+.nav button:hover,
+.nav a:hover {
+  color: var(--fg);
+}
+
+.nav button.active,
+.nav a.active {
+  color: var(--green);
+}
+
+.nav-badge {
+  margin-left: 0.25rem;
+  font-size: 10px;
+}
+.nav-badge--failed {
+  color: var(--red);
+}
+.nav-badge--pending {
+  color: var(--yellow);
+}
+
+.header-right .status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status-dot {
+  width: 4px;
+  height: 4px;
+  background: var(--muted);
+}
+
+.status.healthy .status-dot {
+  background: var(--green);
+}
+
+.status.healthy {
+  color: var(--green);
+}
+
+/* Main */
+.main-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+/* Loading / error */
+.loading,
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.loading p {
+  margin: 0.5rem 0 0 0;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 8px;
+  height: 8px;
+  background: var(--green);
+  margin-bottom: 0.5rem;
+  animation: pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+.error {
+  color: var(--red);
+}
+
+.error button {
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.75rem;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  border: none;
+  outline: none;
+}
+
+/* Section headers */
+.dashboard-header,
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.dashboard-header h2,
+.list-header h2 {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.dashboard-header h2::before,
+.list-header h2::before {
+  content: '% ';
+  color: var(--green);
+  margin-right: 0.35rem;
+}
+
+/* Search / filter inputs */
+.search-input,
+.filter-select,
+.search-btn,
+.refresh-btn {
+  padding: 0.25rem 0.5rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 12px;
+  border: none;
+  outline: none;
+}
+
+.search-btn,
+.refresh-btn {
+  cursor: pointer;
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: opacity 0.2s ease;
+}
+
+.refresh-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.refresh-btn-icon {
+  display: inline-block;
+  font-size: 1em;
+  line-height: 1;
+  transition: transform 0.3s ease;
+}
+
+.refresh-btn--spinning .refresh-btn-icon {
+  animation: refresh-spin 0.6s ease-in-out infinite;
+}
+
+@keyframes refresh-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.search-input::placeholder {
+  color: var(--muted);
+}
+
+/* List header controls */
+.list-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.search-workflow-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.search-error {
+  color: var(--red);
+  font-size: 12px;
+  margin-top: 0.25rem;
+}
+
+.back-btn {
+  padding: 0.25rem 0.5rem;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  border: none;
+  outline: none;
+  text-decoration: none;
+  display: inline-block;
+}
+.back-btn:hover {
+  color: var(--cyan);
+  text-decoration: underline;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.tabs button {
+  padding: 0.35rem 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  border: none;
+  outline: none;
+}
+.tabs button:hover {
+  color: var(--fg);
+}
+.tabs button.active {
+  color: var(--green);
+}
+
+/* Workflow detail */
+.workflow-detail .detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.detail-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.detail-title h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--fg);
+}
+
+.detail-stats {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.detail-stats .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.stat-value {
+  color: var(--fg);
+  font-size: 13px;
+}
+
+/* Workflow cards */
+.workflows-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.workflow-card {
+  cursor: pointer;
+  padding: 1rem;
+  transition: background 0.15s ease;
+}
+
+.workflow-card:hover {
+  background: var(--bg-hover);
+}
+
+.workflow-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.workflow-card-header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-type {
+  color: var(--cyan);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.workflow-card-body {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.workflow-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.workflow-stat .stat-value {
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.workflow-card-footer {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Tables */
+.data-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 600px;
+}
+
+.data-table th {
+  color: var(--muted);
+  font-weight: 400;
+  padding: 0.4rem 0.75rem 0.4rem 0;
+  text-align: left;
+  font-size: 11px;
+  position: relative;
+}
+
+.data-table td {
+  padding: 0.4rem 0.75rem 0.4rem 0;
+  color: var(--fg);
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.data-table tbody tr.expanded {
+  background: var(--bg-hover);
+}
+
+.table-container {
+  overflow-x: auto;
+  width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
+
+.stat-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.empty-state {
+  color: var(--muted);
+}
+
+/* Status badges — terminal-style colors */
+.status-badge {
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+}
+.status-badge.pending { color: var(--yellow); }
+.status-badge.in_progress,
+.status-badge.running { color: var(--blue); }
+.status-badge.completed { color: var(--green); }
+.status-badge.failed { color: var(--red); }
+.status-badge.retrying { color: var(--yellow); }
+
+.error .hint {
+  margin-top: 0.25rem;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.app {
+  min-height: 100vh;
+}
+
+/* JSON syntax highlighting (for JsonTree and similar) */
+.json-token-key { color: var(--cyan); }
+.json-token-string { color: var(--green); }
+.json-token-number { color: var(--yellow); }
+.json-token-boolean { color: var(--blue); }
+.json-token-null { color: var(--muted); }
+.json-token-punctuation { color: var(--muted); }
+
+/* Copy button */
+.copy-btn {
+  padding: 0.15rem 0.4rem;
+  font-size: 10px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid rgba(229, 229, 229, 0.2);
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.copy-btn:hover {
+  color: var(--fg);
+  border-color: rgba(229, 229, 229, 0.4);
+}

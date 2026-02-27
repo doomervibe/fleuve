@@ -6,6 +6,27 @@ import Error from './common/Error';
 import Table from './common/Table';
 import { format, formatDistanceToNow } from 'date-fns';
 
+function CronScheduleInfo({ delay }) {
+  if (!delay.cron_expression) return null;
+  return (
+    <div className="mt-1 text-xs font-mono text-theme opacity-70">
+      <span className="text-theme-accent">cron:</span> {delay.cron_expression}
+      {delay.cron_timezone && (
+        <span className="ml-1">({delay.cron_timezone})</span>
+      )}
+      {delay.next_fire_times && delay.next_fire_times.length > 0 && (
+        <div className="mt-0.5">
+          next: {delay.next_fire_times.slice(0, 5).map((t, i) => (
+            <span key={i} className="mr-2">
+              {format(new Date(t), 'MMM d HH:mm')}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DelayViewer() {
   const [delays, setDelays] = useState([]);
   const [workflowTypes, setWorkflowTypes] = useState([]);
@@ -108,7 +129,7 @@ export default function DelayViewer() {
       render: (row) => (
         <Link
           to={`/workflows/${row.workflow_id}`}
-          className="text-[#00ff00] hover:text-[#FF7B45] font-mono text-xs font-mono"
+          className="text-theme hover:text-theme-accent font-mono text-xs font-mono"
         >
           {row.workflow_id.substring(0, 16)}...
         </Link>
@@ -118,14 +139,14 @@ export default function DelayViewer() {
       key: 'workflow_type',
       label: 'workflow type',
       render: (row) => (
-        <span className="text-xs font-mono text-[#00ff00] font-mono text-xs">{row.workflow_type}</span>
+        <span className="text-xs font-mono text-theme font-mono text-xs">{row.workflow_type}</span>
       ),
     },
     {
       key: 'delay_until',
       label: 'delay until',
       render: (row) => (
-        <span className="text-xs font-mono text-[#00ff00] font-mono text-xs">
+        <span className="text-xs font-mono text-theme font-mono text-xs">
           {format(new Date(row.delay_until), 'MMM d, yyyy HH:mm:ss')}
         </span>
       ),
@@ -138,7 +159,7 @@ export default function DelayViewer() {
         return (
           <span
             className={`text-xs font-mono font-medium ${
-              active ? 'text-yellow-600' : 'text-gray-500'
+              active ? 'text-theme-warning' : 'text-theme opacity-70'
             }`}
           >
             {active ? getTimeRemaining(row.delay_until) : 'completed'}
@@ -150,16 +171,31 @@ export default function DelayViewer() {
       key: 'event_version',
       label: 'event version',
       render: (row) => (
-        <span className="text-xs font-mono text-[#00ff00] font-mono text-xs">{row.event_version}</span>
+        <span className="text-xs font-mono text-theme font-mono text-xs">{row.event_version}</span>
       ),
     },
     {
       key: 'created_at',
       label: 'created',
       render: (row) => (
-        <span className="text-xs font-mono text-[#00ff00] font-mono text-xs opacity-70">
+        <span className="text-xs font-mono text-theme font-mono text-xs opacity-70">
           {format(new Date(row.created_at), 'MMM d, yyyy HH:mm:ss')}
         </span>
+      ),
+    },
+    {
+      key: 'schedule',
+      label: 'schedule',
+      render: (row) => (
+        <div>
+          {row.cron_expression ? (
+            <span className="text-xs font-mono text-theme-accent" title={row.cron_timezone || 'UTC'}>
+              cron: {row.cron_expression}
+            </span>
+          ) : (
+            <span className="text-xs font-mono text-theme opacity-50">one-shot</span>
+          )}
+        </div>
       ),
     },
   ];
@@ -167,8 +203,8 @@ export default function DelayViewer() {
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="text-sm font-mono font-bold text-[#00ff00] font-mono">delay viewer</h2>
-        <p className="mt-0.5 text-xs font-mono text-[#00ff00] font-mono text-xs opacity-70">view scheduled delays and countdown timers</p>
+        <h2 className="text-sm font-mono font-bold text-theme font-mono">delay viewer</h2>
+        <p className="mt-0.5 text-xs font-mono text-theme font-mono text-xs opacity-70">view scheduled delays and countdown timers</p>
       </div>
 
       {/* Stats */}
@@ -176,13 +212,13 @@ export default function DelayViewer() {
         <div className="card p-3">
           <div className="flex items-center">
             <div className="flex-shrink-0">
-              <div className="w-8 h-8 bg-black border border-[#ffbf00]  flex items-center justify-center">
-                <span className="text-white text-xs font-mono font-bold">A</span>
+              <div className="w-8 h-8 bg-theme border border-theme-warning  flex items-center justify-center">
+                <span className="text-theme text-xs font-mono font-bold">A</span>
               </div>
             </div>
             <div className="ml-4">
-              <p className="text-xs font-mono font-medium text-[#00ff00] font-mono text-xs opacity-70">active delays</p>
-              <p className="text-sm font-mono font-bold text-[#00ff00] font-mono">
+              <p className="text-xs font-mono font-medium text-theme font-mono text-xs opacity-70">active delays</p>
+              <p className="text-sm font-mono font-bold text-theme font-mono">
                 {delays.filter((d) => isActive(d.delay_until)).length}
               </p>
             </div>
@@ -191,13 +227,13 @@ export default function DelayViewer() {
         <div className="card p-3">
           <div className="flex items-center">
             <div className="flex-shrink-0">
-              <div className="w-8 h-8 bg-black border border-[#00ff00]  flex items-center justify-center">
-                <span className="text-white text-xs font-mono font-bold">T</span>
+              <div className="w-8 h-8 bg-theme border border-theme  flex items-center justify-center">
+                <span className="text-theme text-xs font-mono font-bold">T</span>
               </div>
             </div>
             <div className="ml-4">
-              <p className="text-xs font-mono font-medium text-[#00ff00] font-mono text-xs opacity-70">total delays</p>
-              <p className="text-sm font-mono font-bold text-[#00ff00] font-mono">{delays.length}</p>
+              <p className="text-xs font-mono font-medium text-theme font-mono text-xs opacity-70">total delays</p>
+              <p className="text-sm font-mono font-bold text-theme font-mono">{delays.length}</p>
             </div>
           </div>
         </div>
@@ -207,7 +243,7 @@ export default function DelayViewer() {
       <div className="card p-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
-            <label className="block text-xs font-mono font-medium text-[#00ff00] font-mono text-xs mb-1">
+            <label className="block text-xs font-mono font-medium text-theme font-mono text-xs mb-1">
               workflow type
             </label>
             <select
@@ -215,7 +251,7 @@ export default function DelayViewer() {
               onChange={(e) =>
                 handleFilterChange({ ...filters, workflow_type: e.target.value })
               }
-              className="w-full px-3 py-2 bg-black border border-[#00ff00] text-[#00ff00] font-mono text-xs focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
+              className="w-full px-3 py-2 bg-theme border border-theme text-theme font-mono text-xs focus:outline-none focus:ring-2 focus:ring-theme-accent"
             >
               <option value="">all types</option>
               {workflowTypes.map((type) => (
@@ -226,7 +262,7 @@ export default function DelayViewer() {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-mono font-medium text-[#00ff00] font-mono text-xs mb-1">
+            <label className="block text-xs font-mono font-medium text-theme font-mono text-xs mb-1">
               workflow id
             </label>
             <input
@@ -236,13 +272,14 @@ export default function DelayViewer() {
                 handleFilterChange({ ...filters, workflow_id: e.target.value })
               }
               placeholder="filter by workflow id..."
-              className="w-full px-3 py-2 bg-black border border-[#00ff00] text-[#00ff00] font-mono text-xs focus:outline-none focus:ring-2 focus:ring-[#FF6B35]"
+              data-search-input
+              className="w-full px-3 py-2 bg-theme border border-theme text-theme font-mono text-xs focus:outline-none focus:ring-2 focus:ring-theme-accent"
             />
           </div>
           <div className="flex items-end">
             <button
               onClick={() => handleFilterChange({ workflow_type: '', workflow_id: '' })}
-              className="px-4 py-2 bg-[#242424] text-[#00ff00] font-mono text-xs  hover:bg-[#2a2a2a]"
+              className="px-4 py-2 bg-[var(--fleuve-surface-hover)] text-theme font-mono text-xs  hover:bg-[var(--fleuve-border-hover)]"
             >
               clear filters
             </button>
@@ -264,7 +301,7 @@ export default function DelayViewer() {
 
       {/* Pagination */}
       <div className="flex items-center justify-between card px-4 py-2">
-        <div className="text-xs font-mono text-[#00ff00] font-mono text-xs">
+        <div className="text-xs font-mono text-theme font-mono text-xs">
           showing {pagination.offset + 1} to {pagination.offset + delays.length} of{' '}
           {delays.length === pagination.limit ? 'many' : delays.length} delays
         </div>
@@ -272,14 +309,14 @@ export default function DelayViewer() {
           <button
             onClick={() => handlePageChange(Math.max(0, pagination.offset - pagination.limit))}
             disabled={pagination.offset === 0}
-            className="px-4 py-2 bg-[#242424] text-[#00ff00] font-mono text-xs  hover:bg-[#2a2a2a] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 bg-[var(--fleuve-surface-hover)] text-theme font-mono text-xs  hover:bg-[var(--fleuve-border-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             previous
           </button>
           <button
             onClick={() => handlePageChange(pagination.offset + pagination.limit)}
             disabled={delays.length < pagination.limit}
-            className="px-4 py-2 bg-[#242424] text-[#00ff00] font-mono text-xs  hover:bg-[#2a2a2a] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-2 bg-[var(--fleuve-surface-hover)] text-theme font-mono text-xs  hover:bg-[var(--fleuve-border-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             next
           </button>
@@ -289,32 +326,33 @@ export default function DelayViewer() {
       {/* Active Delays List */}
       {delays.filter((d) => isActive(d.delay_until)).length > 0 && (
         <div className="card p-3">
-          <h3 className="text-base font-bold text-[#00ff00] font-mono mb-3">active delays</h3>
+          <h3 className="text-base font-bold text-theme font-mono mb-3">active delays</h3>
           <div className="space-y-3">
             {delays
               .filter((d) => isActive(d.delay_until))
               .map((delay, idx) => (
                 <div
                   key={idx}
-                className="border-l-4 border-yellow-500 pl-4 py-2 bg-yellow-900/20 rounded-r-md"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Link
-                      to={`/workflows/${delay.workflow_id}`}
-                      className="text-[#00ff00] hover:text-[#FF7B45] font-mono text-xs font-mono"
-                    >
-                      {delay.workflow_id.substring(0, 16)}...
-                    </Link>
-                    <p className="text-xs font-mono text-[#00ff00] font-mono text-xs mt-0.5">
+                  className="border-l-4 border-theme-warning pl-4 py-2 bg-[var(--fleuve-surface)] rounded-r-md"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Link
+                        to={`/workflows/${delay.workflow_id}`}
+                        className="text-theme hover:text-theme-accent font-mono text-xs font-mono"
+                      >
+                        {delay.workflow_id.substring(0, 16)}...
+                      </Link>
+                      <p className="text-xs font-mono text-theme font-mono text-xs mt-0.5">
                         {format(new Date(delay.delay_until), 'MMM d, yyyy HH:mm:ss')}
                       </p>
+                      <CronScheduleInfo delay={delay} />
                     </div>
                     <div className="text-right">
-                      <p className="text-lg font-bold text-yellow-600">
+                      <p className="text-lg font-bold text-theme-warning">
                         {getTimeRemaining(delay.delay_until)}
                       </p>
-                      <p className="text-xs text-[#00ff00] font-mono text-xs opacity-70">
+                      <p className="text-xs text-theme font-mono text-xs opacity-70">
                         {formatDistanceToNow(new Date(delay.delay_until), { addSuffix: true })}
                       </p>
                     </div>

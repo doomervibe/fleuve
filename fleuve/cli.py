@@ -163,6 +163,9 @@ def create_project(
                     for p in ["node_modules", "dist", "__pycache__", ".git"]
                 ):
                     continue
+                # Skip ui/backend - project uses fleuve.ui from the package
+                if "ui" in ui_file.parts and "backend" in ui_file.parts:
+                    continue
                 if ui_file.suffix in [".pyc", ".pyo"]:
                     continue
 
@@ -718,6 +721,26 @@ def admin_truncate(ctx, workflow_type, table, snapshot_table, retention_days, dr
 
 
 # ---- Validation command ---------------------------------------------------
+
+
+@cli.command("ui")
+@click.option(
+    "--host",
+    default="0.0.0.0",
+    show_default=True,
+    help="Host to bind the UI server",
+)
+@click.option(
+    "--port",
+    default=8001,
+    show_default=True,
+    help="Port for the UI server",
+)
+def ui(host, port):
+    """Start the Fleuve web UI server."""
+    from fleuve.ui.server import run_server
+
+    run_server(host=host, port=port)
 
 
 @cli.command("validate")

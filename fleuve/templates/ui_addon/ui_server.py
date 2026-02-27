@@ -5,17 +5,20 @@ import logging
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 
-# Load environment variables from .env file
-env_path = Path(__file__).parent / ".env"
-load_dotenv(env_path)
+if load_dotenv:
+    env_path = Path(__file__).parent / ".env"
+    load_dotenv(env_path)
 
 import uvicorn
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-from db_models import StoredEvent, Activity, DelaySchedule, Subscription, Offset
-from ui.backend.api import create_app
+from db_models import StoredEvent, Activity, DelaySchedule, Subscription
+from fleuve.ui.backend.api import create_app
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,7 +50,7 @@ def main():
     port = int(os.getenv("UI_PORT", "8001"))
     host = os.getenv("UI_HOST", "0.0.0.0")
 
-    # Get frontend path
+    # Get frontend path (project's built frontend)
     frontend_dist_path = Path(__file__).parent / "ui" / "frontend" / "dist"
 
     if (

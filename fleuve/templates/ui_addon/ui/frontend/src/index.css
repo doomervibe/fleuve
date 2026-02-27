@@ -1,157 +1,89 @@
+/* fleuve-go style: zsh terminal look — black + white + accent colors, no grey, no borders */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  * {
-    font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', monospace;
-  }
+:root {
+  --bg: #000000;
+  --bg-hover: rgba(78, 201, 176, 0.06);
+  --fg: #e5e5e5;
+  --muted: rgba(229, 229, 229, 0.6);
+  --green: #4ec9b0;
+  --blue: #5eb3f6;
+  --red: #f14c4c;
+  --yellow: #dcdcaa;
+  --cyan: #9cdcfe;
+  --font: Menlo, Monaco, 'Courier New', Consolas, monospace;
 
-  body {
-    margin: 0;
-    -webkit-font-smoothing: none;
-    -moz-osx-font-smoothing: unset;
-    background: #000000;
-    color: #00ff00;
-    font-size: 14px;
-    line-height: 1.4;
-  }
-
-  code {
-    font-family: 'Courier New', 'Monaco', 'Menlo', 'Consolas', 'Liberation Mono', 'DejaVu Sans Mono', monospace;
-  }
+  /* Map fleuve-* for component compatibility */
+  --fleuve-bg: var(--bg);
+  --fleuve-text: var(--fg);
+  --fleuve-border: rgba(229, 229, 229, 0.2);
+  --fleuve-border-hover: var(--bg-hover);
+  --fleuve-border-active: rgba(78, 201, 176, 0.15);
+  --fleuve-accent: var(--cyan);
+  --fleuve-warning: var(--yellow);
+  --fleuve-error: var(--red);
+  --fleuve-error-hover: rgba(241, 76, 76, 0.2);
+  --fleuve-muted: var(--muted);
+  --fleuve-surface: rgba(0, 0, 0, 0.3);
+  --fleuve-surface-hover: var(--bg-hover);
 }
 
-@layer components {
-  .card {
-    @apply bg-black border border-[#00ff00] p-1;
-    box-shadow: none;
-  }
-  
-  .card-header {
-    @apply px-2 py-1 border-b border-[#00ff00];
-  }
-  
-  .stat-card {
-    @apply bg-black border border-[#00ff00] p-2;
-    box-shadow: none;
-  }
-  
-  .btn-primary {
-    @apply px-2 py-1 bg-black border border-[#00ff00] text-[#00ff00] font-mono text-sm;
-    box-shadow: none;
-  }
-  
-  .btn-primary:hover {
-    @apply bg-[#003300] text-[#00ff00];
-  }
-  
-  .btn-secondary {
-    @apply px-2 py-1 bg-black border border-[#00ff00] text-[#00ff00] font-mono text-sm;
-    box-shadow: none;
-  }
-  
-  .btn-secondary:hover {
-    @apply bg-[#003300];
-  }
-  
-  .badge {
-    @apply inline-flex items-center px-1 py-0 border border-[#00ff00] text-xs font-mono;
-  }
-  
-  .badge-success {
-    @apply badge bg-black text-[#00ff00] border-[#00ff00];
-  }
-  
-  .badge-warning {
-    @apply badge bg-black text-[#ffbf00] border-[#ffbf00];
-  }
-  
-  .badge-error {
-    @apply badge bg-black text-[#ff0000] border-[#ff0000];
-  }
-  
-  .badge-info {
-    @apply badge bg-black text-[#00ffff] border-[#00ffff];
-  }
+* {
+  font-family: var(--font);
+  line-height: 1.4;
+  font-weight: 400;
+}
 
-  .chart-container {
-    @apply transition-none;
-  }
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
 
-  .chart-container:hover {
-    transform: none;
-  }
+a {
+  color: var(--blue);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
 
-  /* Terminal-style chart colors */
-  .chart-container svg {
-    filter: none;
-  }
+h1, h2, h3 {
+  font-family: inherit;
+  font-weight: 400;
+}
 
-  .chart-card {
-    @apply transition-none;
-    position: relative;
-    overflow: visible;
-  }
+button {
+  font-family: inherit;
+  border: none;
+  outline: none;
+}
 
-  .chart-card:hover {
-    transform: none;
-    box-shadow: none;
-  }
-
-  /* Terminal-style select */
-  select {
-    -webkit-appearance: none;
-    -moz-appearance: none;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2300ff00' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 0.5rem center;
-    background-size: 10px;
-    padding-right: 1.5rem;
-    background-color: #000000;
-    border: 1px solid #00ff00;
-    color: #00ff00;
-    font-family: 'Courier New', monospace;
-    box-shadow: none;
-    -webkit-box-shadow: none;
-    -moz-box-shadow: none;
-  }
-
-  select::-ms-expand {
-    display: none;
-  }
-
-  select:focus {
-    outline: 1px solid #00ff00;
-    box-shadow: none;
-    -webkit-box-shadow: none;
-    -moz-box-shadow: none;
-    background-color: #001100;
-  }
-
-  select option {
-    background-color: #000000;
-    color: #00ff00;
-    padding: 0.25rem;
-    border: none;
-    font-family: 'Courier New', monospace;
-  }
-
-  input {
-    background-color: #000000;
-    border: 1px solid #00ff00;
-    color: #00ff00;
-    font-family: 'Courier New', monospace;
-    padding: 0.25rem 0.5rem;
-  }
-
-  input:focus {
-    outline: 1px solid #00ff00;
-    background-color: #001100;
-  }
-
-  input::placeholder {
-    color: #004400;
-  }
+/* Theme utilities for components using var(--fleuve-*) */
+.text-theme { color: var(--fleuve-text); }
+.bg-theme { background-color: var(--fleuve-bg); }
+.border-theme { border-color: var(--fleuve-border); }
+.text-theme-accent { color: var(--fleuve-accent); }
+.text-theme-warning { color: var(--fleuve-warning); }
+.text-theme-error { color: var(--fleuve-error); }
+.border-theme-warning { border-color: var(--fleuve-warning); }
+.border-theme-error { border-color: var(--fleuve-error); }
+.border-theme-accent { border-color: var(--fleuve-accent); }
+.bg-theme-hover:hover { background-color: var(--fleuve-border-hover); }
+.card {
+  background-color: var(--fleuve-bg);
+  border: 1px solid var(--fleuve-border);
+  padding: 0.25rem;
+}
+.stat-card {
+  background-color: var(--fleuve-bg);
+  border: 1px solid var(--fleuve-border);
+  padding: 0.5rem;
 }

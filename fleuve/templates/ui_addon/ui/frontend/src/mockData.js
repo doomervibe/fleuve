@@ -280,8 +280,23 @@ export function getMockActivities(workflowId) {
   ];
 }
 
+// Helper to generate next N cron fire times (simplified for mock)
+function mockNextFireTimes(baseDate, count = 5) {
+  const result = [];
+  const d = new Date(baseDate);
+  for (let i = 0; i < count; i++) {
+    d.setHours(d.getHours() + 24);
+    result.push(d.toISOString());
+  }
+  return result;
+}
+
 // Mock delays
 export function getMockDelays(workflowId) {
+  const now = new Date();
+  const nextDay = new Date(now);
+  nextDay.setDate(nextDay.getDate() + 1);
+  nextDay.setHours(9, 0, 0, 0);
   return [
     {
       workflow_id: workflowId,
@@ -294,10 +309,13 @@ export function getMockDelays(workflowId) {
     {
       workflow_id: workflowId,
       workflow_type: 'traffic_fine',
-      delay_until: futureDate(5, 0),
+      delay_until: nextDay.toISOString(),
       event_version: 4,
       created_at: pastDate(1, 3),
-      next_command: { type: 'finalize_workflow', params: {} },
+      next_command: { type: 'cron_tick', params: {} },
+      cron_expression: '0 9 * * *',
+      cron_timezone: 'UTC',
+      next_fire_times: mockNextFireTimes(nextDay, 5),
     },
   ];
 }
@@ -321,7 +339,15 @@ export function getMockAllEvents(params = {}) {
   if (params.event_type) {
     events = events.filter(e => e.event_type === params.event_type);
   }
-  
+  if (params.created_after) {
+    const after = new Date(params.created_after).getTime();
+    events = events.filter(e => new Date(e.at).getTime() >= after);
+  }
+  if (params.created_before) {
+    const before = new Date(params.created_before).getTime();
+    events = events.filter(e => new Date(e.at).getTime() <= before);
+  }
+
   // Apply pagination
   const limit = params.limit || 50;
   const offset = params.offset || 0;

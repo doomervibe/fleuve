@@ -1,0 +1,3 @@
+# Frontend dist is populated by: npm run build (in fleuve/templates/ui_addon/ui/frontend)
+# Then copy: cp -r fleuve/templates/ui_addon/ui/frontend/dist/* fleuve/ui/frontend_dist/
+# Or run: python -m fleuve.ui.build_ui

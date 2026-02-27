@@ -56,6 +56,40 @@ export const api = {
   },
 
   // Workflows
+  batchCancel: async (workflowIds) => {
+    if (USE_MOCK_DATA) {
+      await delay();
+      return { status: 'ok', cancelled: workflowIds };
+    }
+    const res = await fetch(`${API_BASE}/workflows/batch/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workflow_ids: workflowIds }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
+  batchReplay: async (workflowIds) => {
+    if (USE_MOCK_DATA) {
+      await delay();
+      return { status: 'ok', replayed: workflowIds };
+    }
+    const res = await fetch(`${API_BASE}/workflows/batch/replay`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workflow_ids: workflowIds }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
   getWorkflows: async (params = {}) => {
     if (USE_MOCK_DATA) {
       await delay();
@@ -67,10 +101,18 @@ export const api = {
       }
       if (params.search) {
         const searchLower = params.search.toLowerCase();
-        workflows = workflows.filter(w => 
+        workflows = workflows.filter(w =>
           w.workflow_id.toLowerCase().includes(searchLower) ||
           w.workflow_type.toLowerCase().includes(searchLower)
         );
+      }
+      if (params.created_after) {
+        const after = new Date(params.created_after).getTime();
+        workflows = workflows.filter(w => new Date(w.created_at).getTime() >= after);
+      }
+      if (params.created_before) {
+        const before = new Date(params.created_before).getTime();
+        workflows = workflows.filter(w => new Date(w.created_at).getTime() <= before);
       }
       
       // Apply pagination
@@ -82,6 +124,8 @@ export const api = {
     const query = new URLSearchParams();
     if (params.workflow_type) query.append('workflow_type', params.workflow_type);
     if (params.search) query.append('search', params.search);
+    if (params.created_after) query.append('created_after', params.created_after);
+    if (params.created_before) query.append('created_before', params.created_before);
     if (params.limit) query.append('limit', params.limit);
     if (params.offset) query.append('offset', params.offset);
     return fetchAPI(`/workflows?${query.toString()}`);
@@ -101,6 +145,30 @@ export const api = {
       return getMockEvents(workflowId);
     }
     return fetchAPI(`/workflows/${workflowId}/events`);
+  },
+
+  getWorkflowStateDiff: async (workflowId, v1, v2) => {
+    if (USE_MOCK_DATA) {
+      await delay();
+      const evs = getMockEvents(workflowId);
+      const toState = (v) => ({
+        version: v,
+        events: evs.filter((e) => e.workflow_version <= v).map((e) => ({
+          version: e.workflow_version,
+          type: e.event_type,
+          body: e.body,
+          at: e.at,
+        })),
+      });
+      return {
+        workflow_id: workflowId,
+        version1: v1,
+        version2: v2,
+        state_v1: toState(v1),
+        state_v2: toState(v2),
+      };
+    }
+    return fetchAPI(`/workflows/${workflowId}/state-diff/${v1}/${v2}`);
   },
 
   getWorkflowStateAtVersion: async (workflowId, version) => {
@@ -138,6 +206,8 @@ export const api = {
     if (params.workflow_type) query.append('workflow_type', params.workflow_type);
     if (params.workflow_id) query.append('workflow_id', params.workflow_id);
     if (params.event_type) query.append('event_type', params.event_type);
+    if (params.created_after) query.append('created_after', params.created_after);
+    if (params.created_before) query.append('created_before', params.created_before);
     if (params.limit) query.append('limit', params.limit);
     if (params.offset) query.append('offset', params.offset);
     return fetchAPI(`/events?${query.toString()}`);
