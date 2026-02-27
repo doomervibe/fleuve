@@ -43,7 +43,5 @@ jobs:
       run: |
         poetry run black --check fleuve/
     
-    - name: Type checking with mypy (optional)
-      continue-on-error: true
-      run: |
-        poetry run mypy fleuve/ || echo "Mypy check failed - this is informational only"
+    - name: Type checking with mypy
+      run: poetry run mypy fleuve
