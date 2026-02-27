@@ -243,7 +243,7 @@ class ActionExecutor(Generic[C, Ae]):
             )
             return False
 
-        event = ConsumedEvent(
+        event: ConsumedEvent[Any] = ConsumedEvent(
             workflow_id=workflow_id,
             event_no=event_number,
             event=event_row.body,
@@ -315,7 +315,7 @@ class ActionExecutor(Generic[C, Ae]):
             )
 
         retry_count = 0
-        last_exception = None
+        last_exception: Exception | None = None
 
         while retry_count <= activity.retry_policy.max_retries:
             try:

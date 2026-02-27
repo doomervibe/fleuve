@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any, AsyncGenerator, Callable, Generic, Type, TypeVar, cast
 
+from pydantic import BaseModel
 from sqlalchemy import CursorResult, insert, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -93,10 +94,11 @@ class ConsumedEvent(Generic[T]):
             body = self._raw_body
             if isinstance(body, str):
                 body = json.loads(body)
+            assert self._body_validator is not None
             self._validated_event = self._body_validator(body)
             self._raw_body = None
             self._body_validator = None
-        return self._validated_event
+        return cast(T, self._validated_event)
 
     @property
     def agg_id(self) -> str:
@@ -221,15 +223,20 @@ class Reader(Generic[T]):
         last = await self.get_offset()
         async with self._s() as s:
             # Lightweight existence check — avoids JSONB cast when idle
-            peek = select(self.db_model.global_id).where(
-                self.db_model.global_id > last
-            ).order_by(self.db_model.global_id).limit(1)
+            peek = (
+                select(self.db_model.global_id)
+                .where(self.db_model.global_id > last)
+                .order_by(self.db_model.global_id)
+                .limit(1)
+            )
             if self.event_types:
                 peek = peek.where(self.db_model.event_type.in_(self.event_types))
             if (await s.execute(peek)).first() is None:
                 return
 
-            body_col_raw = self.db_model.__table__.c["body"].cast(JSONB).label("body_raw")
+            body_col_raw = (
+                self.db_model.__table__.c["body"].cast(JSONB).label("body_raw")
+            )
             cols = [
                 self.db_model.global_id,
                 self.db_model.workflow_version,
@@ -284,13 +291,16 @@ class Reader(Generic[T]):
             return
 
         async with self._s() as s:
-            result = cast(CursorResult[Any], await s.execute(
-                update(self.offset_model)
-                .where(
-                    self.offset_model.reader == self.name,
-                )
-                .values({"last_read_event_no": last_num})
-            ))
+            result = cast(
+                CursorResult[Any],
+                await s.execute(
+                    update(self.offset_model)
+                    .where(
+                        self.offset_model.reader == self.name,
+                    )
+                    .values({"last_read_event_no": last_num})
+                ),
+            )
             assert result.rowcount in (0, 1)
             if result.rowcount == 0:
                 await s.execute(
@@ -524,7 +534,7 @@ class Readers:
                 stream_name=self._jetstream_stream_name or "",
                 consumer_name=reader_name,
                 workflow_type=self._workflow_type or "",
-                event_model_type=self._model,
+                event_model_type=cast(Type[BaseModel], self._model),
             )
 
             return HybridReader(

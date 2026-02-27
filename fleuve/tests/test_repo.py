@@ -260,8 +260,12 @@ class TestInProcessEuphemeralStorage:
         """Accessing a key moves it to the end, preventing eviction."""
         storage = InProcessEuphemeralStorage(max_size=2)
         async with storage:
-            s0 = StoredState(id="wf-0", version=1, state=TestState(counter=0, subscriptions=[]))
-            s1 = StoredState(id="wf-1", version=1, state=TestState(counter=1, subscriptions=[]))
+            s0 = StoredState(
+                id="wf-0", version=1, state=TestState(counter=0, subscriptions=[])
+            )
+            s1 = StoredState(
+                id="wf-1", version=1, state=TestState(counter=1, subscriptions=[])
+            )
             await storage.put_state(s0)
             await storage.put_state(s1)
 
@@ -269,7 +273,9 @@ class TestInProcessEuphemeralStorage:
             await storage.get_state("wf-0")
 
             # Insert wf-2 — should evict wf-1 (least recently used), not wf-0
-            s2 = StoredState(id="wf-2", version=1, state=TestState(counter=2, subscriptions=[]))
+            s2 = StoredState(
+                id="wf-2", version=1, state=TestState(counter=2, subscriptions=[])
+            )
             await storage.put_state(s2)
 
             assert await storage.get_state("wf-0") is not None
@@ -281,8 +287,12 @@ class TestInProcessEuphemeralStorage:
         """Putting a state with the same id overwrites without growing the cache."""
         storage = InProcessEuphemeralStorage(max_size=2)
         async with storage:
-            s1 = StoredState(id="wf-1", version=1, state=TestState(counter=1, subscriptions=[]))
-            s1_v2 = StoredState(id="wf-1", version=2, state=TestState(counter=99, subscriptions=[]))
+            s1 = StoredState(
+                id="wf-1", version=1, state=TestState(counter=1, subscriptions=[])
+            )
+            s1_v2 = StoredState(
+                id="wf-1", version=2, state=TestState(counter=99, subscriptions=[])
+            )
             await storage.put_state(s1)
             await storage.put_state(s1_v2)
 
@@ -297,7 +307,11 @@ class TestInProcessEuphemeralStorage:
         storage = InProcessEuphemeralStorage(max_size=100)
         async with storage:
             for i in range(5):
-                s = StoredState(id=f"wf-{i}", version=1, state=TestState(counter=i, subscriptions=[]))
+                s = StoredState(
+                    id=f"wf-{i}",
+                    version=1,
+                    state=TestState(counter=i, subscriptions=[]),
+                )
                 await storage.put_state(s)
             assert len(storage._cache) == 5
 
@@ -455,8 +469,12 @@ class TestTieredEuphemeralStorage:
         l2 = EuphStorageNATS(c=nats_client, bucket=bucket_name, s=TestState)
 
         async with TieredEuphemeralStorage(l1=l1, l2=l2) as storage:
-            v1 = StoredState(id="wf-1", version=1, state=TestState(counter=1, subscriptions=[]))
-            v2 = StoredState(id="wf-1", version=2, state=TestState(counter=99, subscriptions=[]))
+            v1 = StoredState(
+                id="wf-1", version=1, state=TestState(counter=1, subscriptions=[])
+            )
+            v2 = StoredState(
+                id="wf-1", version=2, state=TestState(counter=99, subscriptions=[])
+            )
             await storage.put_state(v1)
             await storage.put_state(v2)
 
@@ -503,6 +521,7 @@ class TestEuphStorageNATSPickle:
 
             # Should NOT be valid JSON
             import json
+
             try:
                 json.loads(raw)
                 assert False, "Raw bytes should not be valid JSON"
@@ -524,10 +543,12 @@ class TestEuphStorageNATSPickle:
         storage = EuphStorageNATS(c=nats_client, bucket=bucket_name, s=TestState)
 
         async with storage:
-            subs = [Sub(
-                workflow_id="other-wf",
-                event_type="order.placed",
-            )]
+            subs = [
+                Sub(
+                    workflow_id="other-wf",
+                    event_type="order.placed",
+                )
+            ]
             state = TestState(counter=99, subscriptions=subs)
             stored = StoredState(id="wf-complex", version=5, state=state)
             await storage.put_state(stored)
@@ -553,8 +574,12 @@ class TestEuphStorageNATSPickle:
         storage = EuphStorageNATS(c=nats_client, bucket=bucket_name, s=TestState)
 
         async with storage:
-            s1 = StoredState(id="wf-1", version=1, state=TestState(counter=1, subscriptions=[]))
-            s2 = StoredState(id="wf-1", version=2, state=TestState(counter=100, subscriptions=[]))
+            s1 = StoredState(
+                id="wf-1", version=1, state=TestState(counter=1, subscriptions=[])
+            )
+            s2 = StoredState(
+                id="wf-1", version=2, state=TestState(counter=100, subscriptions=[])
+            )
             await storage.put_state(s1)
             await storage.put_state(s2)
 

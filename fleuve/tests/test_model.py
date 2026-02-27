@@ -251,7 +251,7 @@ class TestWorkflow:
         from pathlib import Path
 
         sys.path.insert(0, str(Path(__file__).parent))
-        from conftest import TestCommand
+        from fleuve.tests.conftest import TestCommand
 
         cmd = test_workflow.event_to_cmd(test_event)
         assert cmd is not None

@@ -78,7 +78,8 @@ class EuphStorageNATS(EuphemeralStorage[S, E]):
     ) -> None:
         self._c = c
         self._bucket_name = bucket
-        self._bucket = None
+        self._bucket: Any = None
+        self._js: Any = None
         self._s = s
 
     async def __aenter__(self) -> Self:
@@ -109,7 +110,7 @@ class EuphStorageNATS(EuphemeralStorage[S, E]):
         except KeyNotFoundError:
             return None
         assert entry.value is not None
-        return pickle.loads(entry.value)
+        return cast(StoredState[S], pickle.loads(entry.value))
 
     async def remove_state(self, workflow_id: str):
         assert self._bucket
@@ -254,6 +255,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         self.db_external_sub_model = db_external_sub_model
         self._db_snapshot_model = db_snapshot_model
         self._snapshot_interval = snapshot_interval
+        self._sync_db_handler: SyncDbHandler | None
         if sync_db is not None:
             self._sync_db_handler = sync_db
         elif adapter is not None:
@@ -331,7 +333,11 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                                     "workflow_type": self._workflow_type,
                                     "body": e,
                                     "schema_version": self.model.schema_version(),
-                                    **({"namespace": self._namespace} if self._namespace is not None else {}),
+                                    **(
+                                        {"namespace": self._namespace}
+                                        if self._namespace is not None
+                                        else {}
+                                    ),
                                 }
                                 for i, e in enumerate(events, start=1)
                             ]
@@ -410,14 +416,15 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     ):
         if not self.db_external_sub_model:
             return
-        old_ext = getattr(old_state, "external_subscriptions", None) if old_state else None
+        old_ext = (
+            getattr(old_state, "external_subscriptions", None) if old_state else None
+        )
         new_ext = getattr(new_state, "external_subscriptions", None)
         if old_ext is not None and old_ext is new_ext:
             return
         external_subs = new_ext or []
         if (old_state is None and external_subs) or (
-            old_state
-            and (old_ext or []) != external_subs
+            old_state and (old_ext or []) != external_subs
         ):
             c = await s.execute(
                 select(self.db_external_sub_model).where(
@@ -521,7 +528,11 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                                 "workflow_type": self._workflow_type,
                                 "body": e,
                                 "schema_version": self.model.schema_version(),
-                                **({"namespace": self._namespace} if self._namespace is not None else {}),
+                                **(
+                                    {"namespace": self._namespace}
+                                    if self._namespace is not None
+                                    else {}
+                                ),
                             }
                             for i, e in enumerate(events, start=1)
                         ]
@@ -546,7 +557,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     ) -> StoredState[S] | Rejection:
         """Pause a workflow. Blocks further command processing until resumed."""
         async with self._session_maker() as s:
-            old = await self.get_current_state(s, id)
+            old: StoredState[S] = await self.get_current_state(s, id)
             if getattr(old.state, "lifecycle", "active") == "paused":
                 return Rejection(msg="Workflow is already paused")
             if getattr(old.state, "lifecycle", "active") == "cancelled":
@@ -578,7 +589,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     async def resume_workflow(self, id: str) -> StoredState[S] | Rejection:
         """Resume a paused workflow."""
         async with self._session_maker() as s:
-            old = await self.get_current_state(s, id)
+            old: StoredState[S] = await self.get_current_state(s, id)
             if getattr(old.state, "lifecycle", "active") != "paused":
                 return Rejection(msg="Workflow is not paused")
 
@@ -614,7 +625,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     ) -> StoredState[S] | Rejection:
         """Cancel a workflow. Blocks further command processing."""
         async with self._session_maker() as s:
-            old = await self.get_current_state(s, id)
+            old: StoredState[S] = await self.get_current_state(s, id)
             if getattr(old.state, "lifecycle", "active") == "cancelled":
                 return Rejection(msg="Workflow is already cancelled")
 
@@ -680,7 +691,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             return Rejection(msg="continue_as_new requires snapshotting to be enabled")
 
         async with self._session_maker() as s:
-            current = await self.get_current_state(s, id)
+            current: StoredState[Any] = await self.get_current_state(s, id)
             wf_type = new_workflow_type or self._workflow_type
 
             # Force snapshot at current version
@@ -701,15 +712,11 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
             # Delete entire event history
             await s.execute(
-                delete(self.db_event_model).where(
-                    self.db_event_model.workflow_id == id
-                )
+                delete(self.db_event_model).where(self.db_event_model.workflow_id == id)
             )
 
             # Insert marker event (version=1)
-            marker = EvContinueAsNew(
-                reason=reason, new_workflow_type=new_workflow_type
-            )
+            marker = EvContinueAsNew(reason=reason, new_workflow_type=new_workflow_type)
             await s.execute(
                 insert(self.db_event_model).values(
                     {
@@ -729,7 +736,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
         # Optionally kick off a fresh command against the preserved state
         if new_cmd is not None:
-            result = await self.process_command(id, new_cmd)
+            result: tuple[StoredState[Any], list[Any]] | Rejection = await self.process_command(id, new_cmd)
             if isinstance(result, Rejection):
                 return result
             stored, _ = result
@@ -737,9 +744,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
         return new
 
-    async def set_search_attributes(
-        self, workflow_id: str, attributes: dict
-    ) -> None:
+    async def set_search_attributes(self, workflow_id: str, attributes: dict) -> None:
         """Upsert custom search attributes for a workflow.
 
         Requires ``db_search_attributes_model`` to be set on the repo.
@@ -799,7 +804,8 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             result = await s.execute(
                 select(self._db_search_attributes_model.workflow_id)
                 .where(
-                    self._db_search_attributes_model.workflow_type == self._workflow_type
+                    self._db_search_attributes_model.workflow_type
+                    == self._workflow_type
                 )
                 .where(
                     self._db_search_attributes_model.attributes.contains(
@@ -816,7 +822,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
     ) -> StoredState[S] | None:
         """Replay events from from_version to HEAD. Updates snapshot and ephemeral cache."""
         async with self._session_maker() as s:
-            base = await self.load_state(
+            base: StoredState[S] | None = await self.load_state(
                 s, id, at_version=from_version - 1 if from_version > 1 else 0
             )
             base_state = base.state if base else None
@@ -824,9 +830,9 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
             use_upcast = hasattr(self.db_event_model, "body_raw")
             if use_upcast:
-                q = (
+                q: Any = (
                     select(
-                        self.db_event_model.body_raw,
+                        self.db_event_model.body_raw,  # type: ignore[attr-defined]
                         self.db_event_model.workflow_version,
                         self.db_event_model.event_type,
                         self.db_event_model.schema_version,
@@ -855,7 +861,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
             if use_upcast:
                 body_col = self.db_event_model.__table__.c["body"]
-                pydantic_type = body_col.type._pydantic_type
+                pydantic_type = body_col.type._pydantic_type  # type: ignore[attr-defined]
                 adapter = TypeAdapter(pydantic_type)
                 event_bodies = []
                 for row in rows:
@@ -919,7 +925,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                 md: dict[str, Any] = getattr(event, "metadata_", None) or {}
                 md["workflow_tags"] = workflow_tags
                 try:
-                    event.metadata_ = md  # type: ignore[union-attr]
+                    event.metadata_ = md  # type: ignore[union-attr,attr-defined]
                 except (AttributeError, ValueError):
                     object.__setattr__(event, "metadata_", md)
 
@@ -972,10 +978,11 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                 base_version = snap_row.version
 
         use_upcast = hasattr(self.db_event_model, "body_raw")
+        q: Any
         if use_upcast:
             q = (
                 select(
-                    self.db_event_model.body_raw,
+                    self.db_event_model.body_raw,  # type: ignore[attr-defined]
                     self.db_event_model.workflow_version,
                     self.db_event_model.event_type,
                     self.db_event_model.schema_version,
@@ -988,7 +995,9 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             )
         else:
             q = (
-                select(self.db_event_model.body, self.db_event_model.workflow_version)
+                select(
+                    self.db_event_model.body, self.db_event_model.workflow_version
+                )
                 .where(
                     self.db_event_model.workflow_id == id,
                     self.db_event_model.workflow_version > base_version,
@@ -1008,7 +1017,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
         if use_upcast:
             body_col = self.db_event_model.__table__.c["body"]
-            pydantic_type = body_col.type._pydantic_type
+            pydantic_type = body_col.type._pydantic_type  # type: ignore[attr-defined]
             adapter = TypeAdapter(pydantic_type)
             event_bodies: list[Any] = []
             for row in rows:

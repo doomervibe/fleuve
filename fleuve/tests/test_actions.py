@@ -1180,9 +1180,9 @@ class TestActionConcurrencyLimits:
 
         await self._wait_for_executor(executor)
 
-        assert peak_per_wf["wf-A"] <= 1, (
-            f"Peak per-workflow concurrency was {peak_per_wf['wf-A']}, expected <= 1"
-        )
+        assert (
+            peak_per_wf["wf-A"] <= 1
+        ), f"Peak per-workflow concurrency was {peak_per_wf['wf-A']}, expected <= 1"
 
     @pytest.mark.asyncio
     async def test_per_workflow_allows_cross_workflow_concurrency(
@@ -1241,9 +1241,7 @@ class TestActionConcurrencyLimits:
 
         await self._wait_for_executor(executor)
 
-        assert peak >= 2, (
-            f"Expected cross-workflow concurrency >= 2 but got {peak}"
-        )
+        assert peak >= 2, f"Expected cross-workflow concurrency >= 2 but got {peak}"
 
     @pytest.mark.asyncio
     async def test_both_limits_combined(
@@ -1361,6 +1359,4 @@ class TestActionConcurrencyLimits:
 
         await self._wait_for_executor(executor)
 
-        assert peak >= 4, (
-            f"Expected near-full concurrency (>= 4) but got {peak}"
-        )
+        assert peak >= 4, f"Expected near-full concurrency (>= 4) but got {peak}"

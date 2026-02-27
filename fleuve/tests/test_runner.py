@@ -848,13 +848,20 @@ class TestPipelinedRunner:
         return TestWorkflow
 
     def _make_runner(
-        self, mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=1
+        self,
+        mock_repo,
+        mock_readers,
+        mock_workflow_type,
+        mock_side_effects,
+        max_inflight=1,
     ):
         wf_type = MagicMock()
         wf_type.name.return_value = "test_workflow"
         _DUMMY_CMD = "cmd"
         wf_type.event_to_cmd = MagicMock(
-            side_effect=lambda e: _DUMMY_CMD if e.workflow_type == "test_workflow" else None
+            side_effect=lambda e: (
+                _DUMMY_CMD if e.workflow_type == "test_workflow" else None
+            )
         )
 
         runner = WorkflowsRunner(
@@ -869,7 +876,9 @@ class TestPipelinedRunner:
         runner._cache_initialized = True
         runner._has_tag_subscriptions = False
         runner.workflows_to_notify = AsyncMock(
-            side_effect=lambda e: [e.workflow_id] if e.workflow_type == "test_workflow" else []
+            side_effect=lambda e: (
+                [e.workflow_id] if e.workflow_type == "test_workflow" else []
+            )
         )
         return runner
 
@@ -888,7 +897,11 @@ class TestPipelinedRunner:
         reader.iter_events = fake_iter
 
         runner = self._make_runner(
-            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=1
+            mock_repo,
+            mock_readers,
+            mock_workflow_type,
+            mock_side_effects,
+            max_inflight=1,
         )
 
         await runner.run()
@@ -925,7 +938,11 @@ class TestPipelinedRunner:
         reader.iter_events = fake_iter
 
         runner = self._make_runner(
-            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=3
+            mock_repo,
+            mock_readers,
+            mock_workflow_type,
+            mock_side_effects,
+            max_inflight=3,
         )
 
         await runner.run()
@@ -965,7 +982,11 @@ class TestPipelinedRunner:
         reader.iter_events = fake_iter
 
         runner = self._make_runner(
-            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=5
+            mock_repo,
+            mock_readers,
+            mock_workflow_type,
+            mock_side_effects,
+            max_inflight=5,
         )
 
         await runner.run()
@@ -1001,7 +1022,11 @@ class TestPipelinedRunner:
         reader.iter_events = fake_iter
 
         runner = self._make_runner(
-            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=5
+            mock_repo,
+            mock_readers,
+            mock_workflow_type,
+            mock_side_effects,
+            max_inflight=5,
         )
 
         await runner.run()
@@ -1030,7 +1055,11 @@ class TestPipelinedRunner:
         reader.iter_events = fake_iter
 
         runner = self._make_runner(
-            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=1
+            mock_repo,
+            mock_readers,
+            mock_workflow_type,
+            mock_side_effects,
+            max_inflight=1,
         )
 
         with pytest.raises(BaseExceptionGroup) as exc_info:
@@ -1055,7 +1084,11 @@ class TestPipelinedRunner:
         reader.iter_events = fake_iter
 
         runner = self._make_runner(
-            mock_repo, mock_readers, mock_workflow_type, mock_side_effects, max_inflight=5
+            mock_repo,
+            mock_readers,
+            mock_workflow_type,
+            mock_side_effects,
+            max_inflight=5,
         )
 
         await runner.run()

@@ -287,9 +287,7 @@ class WorkflowTestHarness(Generic[Wf]):
                 self._pending_delays = [
                     d
                     for d in self._pending_delays
-                    if not (
-                        d.workflow_id == workflow_id and d.delay_id == ev.id
-                    )
+                    if not (d.workflow_id == workflow_id and d.delay_id == ev.id)
                 ]
                 self._pending_delays.append(
                     _PendingDelay(
@@ -306,7 +304,7 @@ class WorkflowTestHarness(Generic[Wf]):
         self, cron_expression: str, timezone_name: str | None
     ) -> datetime.datetime | None:
         try:
-            from croniter import croniter
+            from croniter import croniter  # type: ignore[import-untyped]
             from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
             try:

@@ -125,7 +125,9 @@ class EvDelay(EventBase, Generic[C], ABC):
     id: str  # Unique ID for this delay (workflow-provided); enables multiple delays per workflow
     delay_until: datetime.datetime
     next_cmd: C
-    cron_expression: str | None = None  # croniter-compatible expression for recurring schedules
+    cron_expression: str | None = (
+        None  # croniter-compatible expression for recurring schedules
+    )
     timezone: str | None = None  # IANA timezone name (e.g. "UTC", "America/New_York")
 
 

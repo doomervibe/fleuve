@@ -15,7 +15,13 @@ from datetime import datetime
 from typing import Type
 
 from nats.aio.client import Client as NATS
-from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy, StorageType, StreamConfig
+from nats.js.api import (
+    AckPolicy,
+    ConsumerConfig,
+    DeliverPolicy,
+    StorageType,
+    StreamConfig,
+)
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

@@ -42,7 +42,7 @@ class DbEventModel(StoredEvent):
         # Body can be TestEvent (workflow events), EvDelayComplete (system-emitted),
         # or EvSystemPause/EvSystemResume/EvSystemCancel (lifecycle)
         return mapped_column(
-            PydanticType(
+            PydanticType(  # type: ignore[arg-type]
                 Union[
                     EvDelayComplete[TestCommand],
                     EvSystemPause,

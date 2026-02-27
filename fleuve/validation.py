@@ -57,7 +57,9 @@ def validate_workflow(workflow_class: Type[Workflow]) -> list[str]:
     try:
         sv = workflow_class.schema_version()
         if not isinstance(sv, int) or sv < 1:
-            errors.append(f"{name}.schema_version() must return a positive int, got {sv!r}")
+            errors.append(
+                f"{name}.schema_version() must return a positive int, got {sv!r}"
+            )
     except Exception as exc:
         errors.append(f"{name}.schema_version() raised {type(exc).__name__}: {exc}")
 

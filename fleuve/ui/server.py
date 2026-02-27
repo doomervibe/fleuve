@@ -26,7 +26,9 @@ def _get_frontend_dist_path() -> Path | None:
     if (dist / "index.html").exists():
         return dist
     # Fallback: check template location (development)
-    template_dist = ui_dir.parent / "templates" / "ui_addon" / "ui" / "frontend" / "dist"
+    template_dist = (
+        ui_dir.parent / "templates" / "ui_addon" / "ui" / "frontend" / "dist"
+    )
     if (template_dist / "index.html").exists():
         return template_dist
     return None

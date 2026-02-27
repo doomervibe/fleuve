@@ -41,7 +41,7 @@ jobs:
     
     - name: Check code formatting with Black
       run: |
-        poetry run black --check fleuve/ fleuve_ui/
+        poetry run black --check fleuve/
     
     - name: Type checking with mypy (optional)
       continue-on-error: true

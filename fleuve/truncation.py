@@ -111,14 +111,17 @@ class TruncationService:
 
         for workflow_id, snap_version in snapshots:
             async with self._session_maker() as s:
-                cursor_result = cast(CursorResult[Any], await s.execute(
-                    delete(self._event_model)
-                    .where(self._event_model.workflow_id == workflow_id)
-                    .where(self._event_model.workflow_version < snap_version)
-                    .where(self._event_model.global_id < min_offset)
-                    .where(self._event_model.pushed == True)  # noqa: E712
-                    .where(self._event_model.at < cutoff_time)
-                ))
+                cursor_result = cast(
+                    CursorResult[Any],
+                    await s.execute(
+                        delete(self._event_model)
+                        .where(self._event_model.workflow_id == workflow_id)
+                        .where(self._event_model.workflow_version < snap_version)
+                        .where(self._event_model.global_id < min_offset)
+                        .where(self._event_model.pushed == True)  # noqa: E712
+                        .where(self._event_model.at < cutoff_time)
+                    ),
+                )
                 count: int = cursor_result.rowcount or 0
                 if count > 0:
                     await s.commit()

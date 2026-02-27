@@ -43,7 +43,7 @@ from typing import Any, Generator
 # ---------------------------------------------------------------------------
 
 try:
-    from prometheus_client import Counter, Gauge, Histogram  # type: ignore[import-untyped]
+    from prometheus_client import Counter, Gauge, Histogram  # type: ignore[import-not-found]
 
     _PROMETHEUS_AVAILABLE: bool = True
 except ImportError:
@@ -91,7 +91,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 try:
-    from opentelemetry import metrics as _otel_metrics  # type: ignore[import-untyped]
+    from opentelemetry import metrics as _otel_metrics  # type: ignore[import-not-found]
 
     _OTEL_METRICS_AVAILABLE: bool = True
 except ImportError:
@@ -138,7 +138,7 @@ class FleuveMetrics:
     def __init__(
         self,
         workflow_type: str,
-        enable_metrics: bool = True,   # kept for backward compatibility
+        enable_metrics: bool = True,  # kept for backward compatibility
         enable_prometheus: bool | None = None,
         enable_otel: bool = False,
     ):
@@ -153,7 +153,9 @@ class FleuveMetrics:
         """
         self.workflow_type = workflow_type
 
-        prom_flag = enable_prometheus if enable_prometheus is not None else enable_metrics
+        prom_flag = (
+            enable_prometheus if enable_prometheus is not None else enable_metrics
+        )
         self._prometheus_enabled = prom_flag and _PROMETHEUS_AVAILABLE
         self._otel_enabled = enable_otel and _OTEL_METRICS_AVAILABLE
 
@@ -367,9 +369,9 @@ class FleuveMetrics:
                 workflow_type=self.workflow_type, status=status
             ).inc()
             if latency_seconds is not None:
-                self.command_latency.labels(
-                    workflow_type=self.workflow_type
-                ).observe(latency_seconds)
+                self.command_latency.labels(workflow_type=self.workflow_type).observe(
+                    latency_seconds
+                )
         self._otel_commands_processed.add(1, attributes=attrs)
         if latency_seconds is not None:
             self._otel_command_latency.record(
@@ -403,9 +405,9 @@ class FleuveMetrics:
         if self._prometheus_enabled:
             self.actions_executed.labels(workflow_type=self.workflow_type).inc()
             if duration_seconds is not None:
-                self.action_duration.labels(
-                    workflow_type=self.workflow_type
-                ).observe(duration_seconds)
+                self.action_duration.labels(workflow_type=self.workflow_type).observe(
+                    duration_seconds
+                )
         self._otel_actions_executed.add(1, attributes=attrs)
         if duration_seconds is not None:
             self._otel_action_duration.record(duration_seconds, attributes=attrs)
@@ -431,9 +433,9 @@ class FleuveMetrics:
         """Record time taken to load/reconstruct workflow state from DB/snapshot."""
         attrs = {"workflow_type": self.workflow_type}
         if self._prometheus_enabled:
-            self.state_load_time.labels(
-                workflow_type=self.workflow_type
-            ).observe(duration_seconds)
+            self.state_load_time.labels(workflow_type=self.workflow_type).observe(
+                duration_seconds
+            )
         self._otel_state_load_time.record(duration_seconds, attributes=attrs)
 
     def set_active_workflows(self, count: int) -> None:
@@ -443,7 +445,9 @@ class FleuveMetrics:
             self.active_workflows.labels(workflow_type=self.workflow_type).set(count)
         # OTel UpDownCounter: just add delta; re-set not idiomatic but acceptable
         # callers should pass absolute value; we record as-is
-        self._otel_active_workflows.add(0, attributes=attrs)  # no-op; gauge not directly wrappable
+        self._otel_active_workflows.add(
+            0, attributes=attrs
+        )  # no-op; gauge not directly wrappable
 
     def set_pending_delays(self, count: int) -> None:
         """Update pending-delay-schedules gauge."""
@@ -467,7 +471,9 @@ class FleuveMetrics:
 
     def record_outbox_published(self, count: int = 1) -> None:
         if self._prometheus_enabled:
-            self.outbox_events_published.labels(workflow_type=self.workflow_type).inc(count)
+            self.outbox_events_published.labels(workflow_type=self.workflow_type).inc(
+                count
+            )
 
     def record_outbox_failure(self, error_type: str) -> None:
         if self._prometheus_enabled:
@@ -487,7 +493,9 @@ class FleuveMetrics:
 
     def observe_outbox_batch_size(self, batch_size: int) -> None:
         if self._prometheus_enabled:
-            self.outbox_batch_size.labels(workflow_type=self.workflow_type).observe(batch_size)
+            self.outbox_batch_size.labels(workflow_type=self.workflow_type).observe(
+                batch_size
+            )
 
     def set_consumer_lag(self, consumer_name: str, lag: int) -> None:
         if self._prometheus_enabled:
@@ -525,7 +533,9 @@ class FleuveMetrics:
                 workflow_type=self.workflow_type, reader_name=reader_name
             ).inc()
 
-    def record_reader_event(self, reader_name: str, source: str, count: int = 1) -> None:
+    def record_reader_event(
+        self, reader_name: str, source: str, count: int = 1
+    ) -> None:
         if self._prometheus_enabled:
             self.reader_events_read.labels(
                 workflow_type=self.workflow_type,

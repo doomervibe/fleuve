@@ -10,12 +10,12 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Generator
 
 if TYPE_CHECKING:
-    from opentelemetry import trace as _trace_mod
-    from opentelemetry.trace import StatusCode as _StatusCode
+    from opentelemetry import trace as _trace_mod  # type: ignore[import-not-found]
+    from opentelemetry.trace import StatusCode as _StatusCode  # type: ignore[import-not-found]
 
 try:
-    from opentelemetry import trace  # type: ignore[import-untyped]
-    from opentelemetry.trace import StatusCode  # type: ignore[import-untyped]
+    from opentelemetry import trace  # type: ignore[import-not-found]
+    from opentelemetry.trace import StatusCode  # type: ignore[import-not-found]
 
     _OTEL_AVAILABLE: bool = True
 except ImportError:

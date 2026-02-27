@@ -35,7 +35,9 @@ def render_template(content: str, **kwargs) -> str:
 
 
 def _get_database_url() -> str:
-    url = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/fleuve")
+    url = os.getenv(
+        "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/fleuve"
+    )
     return url
 
 
@@ -186,7 +188,9 @@ def create_project(
             click.echo("✓ UI files added (FastAPI backend + React frontend)")
 
     if multi_workflow:
-        click.echo(f"✓ Created multi-workflow Fleuve project '{project_name}' in {project_dir}")
+        click.echo(
+            f"✓ Created multi-workflow Fleuve project '{project_name}' in {project_dir}"
+        )
         click.echo(f"✓ Initial workflow '{workflow_name}' created")
         click.echo("\nNext steps:")
         click.echo(f"  1. cd {project_name}")
@@ -224,7 +228,10 @@ def add_workflow(
 
     workflow_dir = workflows_dir / workflow_name
     if workflow_dir.exists():
-        click.echo(f"Error: Workflow '{workflow_name}' already exists in {workflow_dir}", err=True)
+        click.echo(
+            f"Error: Workflow '{workflow_name}' already exists in {workflow_dir}",
+            err=True,
+        )
         sys.exit(1)
 
     template_dir = (
@@ -274,7 +281,9 @@ async def _make_session_maker(database_url: str):
     return async_sessionmaker(engine, expire_on_commit=False), engine
 
 
-async def _inspect_workflow(database_url: str, workflow_id: str, workflow_type: str) -> None:
+async def _inspect_workflow(
+    database_url: str, workflow_id: str, workflow_type: str
+) -> None:
     from sqlalchemy import select, text
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -296,7 +305,9 @@ async def _inspect_workflow(database_url: str, workflow_id: str, workflow_type: 
             rows = result.fetchall()
             if not rows:
                 # Try without workflow_type filter (detect table name)
-                click.echo(f"No events found for workflow '{workflow_id}' of type '{workflow_type}'")
+                click.echo(
+                    f"No events found for workflow '{workflow_id}' of type '{workflow_type}'"
+                )
                 click.echo("Hint: check --table option or ensure the workflow exists")
                 return
 
@@ -320,6 +331,7 @@ def cli():
 
 
 # ---- Project scaffolding commands ----------------------------------------
+
 
 @cli.command("startproject")
 @click.argument("name", required=False)
@@ -402,10 +414,14 @@ def admin_inspect(ctx, workflow_id, workflow_type, table):
                 )
                 rows = result.fetchall()
                 if not rows:
-                    click.echo(f"No events found for workflow '{workflow_id}' (type={workflow_type})")
+                    click.echo(
+                        f"No events found for workflow '{workflow_id}' (type={workflow_type})"
+                    )
                     return
 
-                click.echo(f"\nWorkflow: {workflow_id}  type={workflow_type}  events={len(rows)}")
+                click.echo(
+                    f"\nWorkflow: {workflow_id}  type={workflow_type}  events={len(rows)}"
+                )
                 click.echo(f"\n{'Version':<10} {'Event Type':<35} At")
                 click.echo("-" * 70)
                 for row in rows:
@@ -418,7 +434,9 @@ def admin_inspect(ctx, workflow_id, workflow_type, table):
 
 @admin.command("list")
 @click.option("--type", "workflow_type", required=True, help="Workflow type name")
-@click.option("--status", default=None, help="Filter by lifecycle (active/paused/cancelled)")
+@click.option(
+    "--status", default=None, help="Filter by lifecycle (active/paused/cancelled)"
+)
 @click.option("--limit", default=50, show_default=True, help="Max results")
 @click.option("--table", default="events", show_default=True, help="Events table name")
 @click.pass_context
@@ -498,7 +516,12 @@ def admin_pause(ctx, workflow_id, workflow_type, reason, table):
                         f"INSERT INTO {table} (workflow_id, workflow_version, event_type, workflow_type, body, schema_version) "
                         f"VALUES (:wf_id, :ver, 'system_pause', :wf_type, :body::jsonb, 1)"
                     ),
-                    {"wf_id": workflow_id, "ver": version + 1, "wf_type": workflow_type, "body": body},
+                    {
+                        "wf_id": workflow_id,
+                        "ver": version + 1,
+                        "wf_type": workflow_type,
+                        "body": body,
+                    },
                 )
                 await s.commit()
                 click.echo(f"✓ Workflow '{workflow_id}' paused.")
@@ -544,7 +567,12 @@ def admin_resume(ctx, workflow_id, workflow_type, table):
                         f"INSERT INTO {table} (workflow_id, workflow_version, event_type, workflow_type, body, schema_version) "
                         f"VALUES (:wf_id, :ver, 'system_resume', :wf_type, :body::jsonb, 1)"
                     ),
-                    {"wf_id": workflow_id, "ver": version + 1, "wf_type": workflow_type, "body": body},
+                    {
+                        "wf_id": workflow_id,
+                        "ver": version + 1,
+                        "wf_type": workflow_type,
+                        "body": body,
+                    },
                 )
                 await s.commit()
                 click.echo(f"✓ Workflow '{workflow_id}' resumed.")
@@ -591,7 +619,12 @@ def admin_cancel(ctx, workflow_id, workflow_type, reason, table):
                         f"INSERT INTO {table} (workflow_id, workflow_version, event_type, workflow_type, body, schema_version) "
                         f"VALUES (:wf_id, :ver, 'system_cancel', :wf_type, :body::jsonb, 1)"
                     ),
-                    {"wf_id": workflow_id, "ver": version + 1, "wf_type": workflow_type, "body": body},
+                    {
+                        "wf_id": workflow_id,
+                        "ver": version + 1,
+                        "wf_type": workflow_type,
+                        "body": body,
+                    },
                 )
                 await s.commit()
                 click.echo(f"✓ Workflow '{workflow_id}' cancelled.")
@@ -619,7 +652,9 @@ def admin_replay(ctx, workflow_id, workflow_type, from_version):
 
 
 @admin.command("health")
-@click.option("--nats-url", envvar="NATS_URL", default="nats://localhost:4222", show_default=True)
+@click.option(
+    "--nats-url", envvar="NATS_URL", default="nats://localhost:4222", show_default=True
+)
 @click.pass_context
 def admin_health(ctx, nats_url):
     """Check database and NATS connectivity."""
@@ -663,8 +698,12 @@ def admin_health(ctx, nats_url):
 @click.option("--type", "workflow_type", required=True, help="Workflow type name")
 @click.option("--table", default="events", show_default=True, help="Events table name")
 @click.option("--snapshot-table", default="snapshots", show_default=True)
-@click.option("--retention-days", default=7, show_default=True, help="Min retention in days")
-@click.option("--dry-run", is_flag=True, help="Show what would be deleted without deleting")
+@click.option(
+    "--retention-days", default=7, show_default=True, help="Min retention in days"
+)
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be deleted without deleting"
+)
 @click.pass_context
 def admin_truncate(ctx, workflow_type, table, snapshot_table, retention_days, dry_run):
     """Truncate old events that have been superseded by a snapshot."""
@@ -691,10 +730,14 @@ def admin_truncate(ctx, workflow_type, table, snapshot_table, retention_days, dr
                 )
                 count = count_result.scalar() or 0
                 if dry_run:
-                    click.echo(f"[dry-run] Would delete {count} events for type '{workflow_type}'")
+                    click.echo(
+                        f"[dry-run] Would delete {count} events for type '{workflow_type}'"
+                    )
                     return
                 if count == 0:
-                    click.echo(f"No events eligible for truncation for type '{workflow_type}'")
+                    click.echo(
+                        f"No events eligible for truncation for type '{workflow_type}'"
+                    )
                     return
                 await s.execute(
                     text(
@@ -712,7 +755,8 @@ def admin_truncate(ctx, workflow_type, table, snapshot_table, retention_days, dr
         except Exception as e:
             click.echo(f"Truncation failed: {e}", err=True)
             click.echo(
-                "Tip: if the snapshot table doesn't exist, enable snapshotting first.", err=True
+                "Tip: if the snapshot table doesn't exist, enable snapshotting first.",
+                err=True,
             )
         finally:
             await engine.dispose()

@@ -4,7 +4,7 @@ import logging
 from typing import Generic, Type, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from croniter import croniter
+from croniter import croniter  # type: ignore[import-untyped]
 from pydantic import BaseModel
 from sqlalchemy import delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

@@ -71,7 +71,9 @@ class DelayResponse(BaseModel):
     next_command: Dict[str, Any]
     cron_expression: Optional[str] = None
     cron_timezone: Optional[str] = None
-    next_fire_times: Optional[List[datetime]] = None  # Next 5 fire times for cron schedules
+    next_fire_times: Optional[List[datetime]] = (
+        None  # Next 5 fire times for cron schedules
+    )
 
 
 class StatsResponse(BaseModel):

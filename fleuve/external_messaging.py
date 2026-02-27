@@ -11,10 +11,16 @@ The runner listens for messages and routes them to workflows by:
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Type
+from typing import Any, Callable, Type, cast
 
 from nats.aio.client import Client as NATS
-from nats.js.api import AckPolicy, ConsumerConfig, DeliverPolicy, StorageType, StreamConfig
+from nats.js.api import (
+    AckPolicy,
+    ConsumerConfig,
+    DeliverPolicy,
+    StorageType,
+    StreamConfig,
+)
 from pydantic import BaseModel
 from sqlalchemy import distinct, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -194,13 +200,17 @@ class ExternalMessageConsumer:
         self._fetch_timeout = fetch_timeout
 
         if parse_payload is None:
-            self._parse_payload = lambda b: None
+            self._parse_payload = cast(
+                Callable[[bytes], BaseModel | None], lambda b: None
+            )
         elif isinstance(parse_payload, type) and issubclass(parse_payload, BaseModel):
             self._parse_payload = lambda b: parse_payload.model_validate_json(
                 b.decode()
             )
         else:
-            self._parse_payload = parse_payload
+            self._parse_payload = cast(
+                Callable[[bytes], BaseModel | None], parse_payload
+            )
 
         self._js = None
         self._subscription = None

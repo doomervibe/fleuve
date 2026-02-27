@@ -136,7 +136,7 @@ def _apply_env_overrides(cfg: dict[str, Any]) -> None:
     for env_key, env_val in os.environ.items():
         if not env_key.startswith("FLEUVE_"):
             continue
-        cfg_key = env_key[len("FLEUVE_"):].lower()
+        cfg_key = env_key[len("FLEUVE_") :].lower()
         if cfg_key in _BOOL_KEYS:
             cfg[cfg_key] = env_val.lower() in ("1", "true", "yes")
         elif cfg_key in _INT_KEYS:

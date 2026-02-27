@@ -64,7 +64,7 @@ class FleuveCommandGateway:
             except (ValueError, TypeError) as e:
                 raise HTTPException(400, detail=str(e))
 
-            result = await repo.process_command(workflow_id, cmd)
+            result: Any = await repo.process_command(workflow_id, cmd)
             if isinstance(result, Rejection):
                 raise HTTPException(400, detail=result.msg)
             stored, events = result
@@ -102,7 +102,7 @@ class FleuveCommandGateway:
             except (ValueError, TypeError) as e:
                 raise HTTPException(400, detail=str(e))
 
-            result = await repo.create_new(cmd, workflow_id)
+            result: Any = await repo.create_new(cmd, workflow_id)
             if isinstance(result, Rejection):
                 raise HTTPException(400, detail=result.msg)
             return {
@@ -124,7 +124,7 @@ class FleuveCommandGateway:
                     404, detail=f"Unknown workflow type: {workflow_type}"
                 )
 
-            result = await repo.pause_workflow(workflow_id, reason)
+            result: Any = await repo.pause_workflow(workflow_id, reason)
             if isinstance(result, Rejection):
                 raise HTTPException(400, detail=result.msg)
             return {"status": "ok", "message": "Workflow paused"}
@@ -138,7 +138,7 @@ class FleuveCommandGateway:
                     404, detail=f"Unknown workflow type: {workflow_type}"
                 )
 
-            result = await repo.resume_workflow(workflow_id)
+            result: Any = await repo.resume_workflow(workflow_id)
             if isinstance(result, Rejection):
                 raise HTTPException(400, detail=result.msg)
             return {"status": "ok", "message": "Workflow resumed"}
@@ -156,7 +156,7 @@ class FleuveCommandGateway:
                     404, detail=f"Unknown workflow type: {workflow_type}"
                 )
 
-            result = await repo.cancel_workflow(
+            result: Any = await repo.cancel_workflow(
                 workflow_id, reason, action_executor=self._action_executor
             )
             if isinstance(result, Rejection):

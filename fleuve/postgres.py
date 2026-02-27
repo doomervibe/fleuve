@@ -23,7 +23,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, BYTEA, JSONB
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 from sqlalchemy.schema import Index
 
@@ -139,7 +139,10 @@ class PydanticType(TypeDecorator[ModelT]):
         return self._adapter.validate_json(value)
 
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    """SQLAlchemy declarative base for Fleuve models."""
+
+    pass
 
 
 class StoredEvent(Base):

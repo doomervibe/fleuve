@@ -179,17 +179,19 @@ async def create_workflow_runner(
             await resources.runner.run()
     """
     # Get configuration from environment or use defaults
-    database_url = database_url or os.getenv(
-        "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/fleuve"
+    db_url: str = (
+        database_url
+        or os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/fleuve")
+        or "postgresql+asyncpg://postgres:postgres@localhost/fleuve"
     )
-    nats_url = nats_url or os.getenv("NATS_URL", "nats://localhost:4222")
+    nats_addr: str = nats_url or os.getenv("NATS_URL", "nats://localhost:4222") or "nats://localhost:4222"
 
     # Default bucket name from workflow
     if nats_bucket is None:
         nats_bucket = f"{workflow_type.name()}_states"
 
     # Create database engine and session maker
-    engine = create_async_engine(database_url, echo=engine_echo)
+    engine = create_async_engine(db_url, echo=engine_echo)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
     # Create database tables if requested
@@ -199,13 +201,13 @@ async def create_workflow_runner(
 
     # Connect to NATS
     nc = NATS()
-    await nc.connect(nats_url)
+    await nc.connect(nats_addr)
 
     try:
         # Create tiered ephemeral storage: L1 in-process LRU + L2 NATS KV
-        l1 = InProcessEuphemeralStorage(max_size=max_cache_size)
-        l2 = EuphStorageNATS(nc, nats_bucket, state_type)
-        ephemeral_storage = TieredEuphemeralStorage(l1=l1, l2=l2)
+        l1: InProcessEuphemeralStorage = InProcessEuphemeralStorage(max_size=max_cache_size)
+        l2: EuphStorageNATS = EuphStorageNATS(nc, nats_bucket, state_type)
+        ephemeral_storage: TieredEuphemeralStorage = TieredEuphemeralStorage(l1=l1, l2=l2)
         await ephemeral_storage.__aenter__()
 
         try:
@@ -213,7 +215,7 @@ async def create_workflow_runner(
             if enable_otel:
                 tracer = FleuveTracer(workflow_type=workflow_type.name(), enable=True)
 
-            repo = AsyncRepo(
+            repo: AsyncRepo = AsyncRepo(
                 session_maker=session_maker,
                 es=ephemeral_storage,
                 model=workflow_type,

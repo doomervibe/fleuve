@@ -27,6 +27,7 @@ from fleuve.stream import ConsumedEvent
 # Heavyweight models that make deserialization cost noticeable
 # ---------------------------------------------------------------------------
 
+
 class PerfEvent(EventBase):
     type: Literal["perf_event"] = "perf_event"
     payload: dict = Field(default_factory=dict)
@@ -52,7 +53,9 @@ def _make_event_dict(i: int, n_tags: int = 20, payload_keys: int = 30) -> dict:
 def _make_stored_state(wf_id: str, n_items: int = 50) -> StoredState[PerfState]:
     state = PerfState(
         counter=42,
-        items=[{"id": i, "name": f"item-{i}", "meta": {"x": i}} for i in range(n_items)],
+        items=[
+            {"id": i, "name": f"item-{i}", "meta": {"x": i}} for i in range(n_items)
+        ],
     )
     return StoredState(id=wf_id, version=1, state=state)
 
@@ -67,6 +70,7 @@ def _validate_perf_event(raw: dict) -> PerfEvent:
 # ---------------------------------------------------------------------------
 # 1. Lazy ConsumedEvent: skip validation vs eager validation
 # ---------------------------------------------------------------------------
+
 
 class TestLazyValidationPerf:
     """Measure how much time is saved when events are never accessed."""
@@ -119,8 +123,12 @@ class TestLazyValidationPerf:
         t0 = time.perf_counter()
         for i in range(self.N):
             ev = ConsumedEvent(
-                workflow_id=f"wf-{i}", event_no=i, global_id=i, at=now,
-                workflow_type="bench", event_type="perf_event",
+                workflow_id=f"wf-{i}",
+                event_no=i,
+                global_id=i,
+                at=now,
+                workflow_type="bench",
+                event_type="perf_event",
                 event=_validate_perf_event(raw_bodies[i]),
             )
             _ = ev.event_type
@@ -130,9 +138,14 @@ class TestLazyValidationPerf:
         t0 = time.perf_counter()
         for i in range(self.N):
             ev = ConsumedEvent(
-                workflow_id=f"wf-{i}", event_no=i, global_id=i, at=now,
-                workflow_type="bench", event_type="perf_event",
-                _raw_body=raw_bodies[i], _body_validator=_validate_perf_event,
+                workflow_id=f"wf-{i}",
+                event_no=i,
+                global_id=i,
+                at=now,
+                workflow_type="bench",
+                event_type="perf_event",
+                _raw_body=raw_bodies[i],
+                _body_validator=_validate_perf_event,
             )
             _ = ev.event_type
         lazy_ms = (time.perf_counter() - t0) * 1000
@@ -160,8 +173,12 @@ class TestLazyValidationPerf:
         t0 = time.perf_counter()
         for i in range(self.N):
             ev = ConsumedEvent(
-                workflow_id=f"wf-{i}", event_no=i, global_id=i, at=now,
-                workflow_type="bench", event_type="perf_event",
+                workflow_id=f"wf-{i}",
+                event_no=i,
+                global_id=i,
+                at=now,
+                workflow_type="bench",
+                event_type="perf_event",
                 event=_validate_perf_event(raw_bodies[i]),
             )
             _ = ev.event
@@ -171,9 +188,14 @@ class TestLazyValidationPerf:
         t0 = time.perf_counter()
         for i in range(self.N):
             ev = ConsumedEvent(
-                workflow_id=f"wf-{i}", event_no=i, global_id=i, at=now,
-                workflow_type="bench", event_type="perf_event",
-                _raw_body=raw_bodies[i], _body_validator=_validate_perf_event,
+                workflow_id=f"wf-{i}",
+                event_no=i,
+                global_id=i,
+                at=now,
+                workflow_type="bench",
+                event_type="perf_event",
+                _raw_body=raw_bodies[i],
+                _body_validator=_validate_perf_event,
             )
             _ = ev.event
         lazy_ms = (time.perf_counter() - t0) * 1000
@@ -222,6 +244,7 @@ class TestLazyValidationPerf:
 # ---------------------------------------------------------------------------
 # 2. In-process LRU cache: zero-deser reads vs pickle round-trip
 # ---------------------------------------------------------------------------
+
 
 class TestInProcessCachePerf:
     """Compare get_state from in-process cache vs pickle deserialization."""
@@ -293,6 +316,7 @@ class TestInProcessCachePerf:
 # 3. String-based event routing vs isinstance
 # ---------------------------------------------------------------------------
 
+
 class TestRoutingPerf:
     """String comparison routing vs isinstance + full body validation."""
 
@@ -361,6 +385,7 @@ class TestRoutingPerf:
 # ---------------------------------------------------------------------------
 # 4. LRU eviction under pressure: stays bounded
 # ---------------------------------------------------------------------------
+
 
 class TestLRUBoundedness:
     """Verify the LRU cache stays within its max_size under heavy writes."""

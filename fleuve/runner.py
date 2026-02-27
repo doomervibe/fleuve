@@ -484,7 +484,7 @@ class WorkflowsRunner:
         try:
             if predecessor is not None:
                 await predecessor.wait()
-            result = await self.repo.process_command(workflow_id, cmd)
+            result: Any = await self.repo.process_command(workflow_id, cmd)
             if isinstance(result, tuple):
                 stored_state, events = result
                 await self._update_subscription_cache(
@@ -525,7 +525,7 @@ class WorkflowsRunner:
             )
             row = result.fetchone()
             if row:
-                return row.target_offset
+                return int(row.target_offset) if row.target_offset is not None else None
         return None
 
     def to_be_act_on(self, event: ConsumedEvent) -> bool:
@@ -636,8 +636,7 @@ class WorkflowsRunner:
                             == event.workflow_id,
                         ),
                         and_(
-                            self.db_sub_type.subscribed_to_event_type
-                            == event_type,
+                            self.db_sub_type.subscribed_to_event_type == event_type,
                             self.db_sub_type.subscribed_to_workflow.in_(
                                 ["*", event.workflow_id]
                             ),

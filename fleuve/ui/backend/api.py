@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
-    from croniter import croniter
+    from croniter import croniter  # type: ignore[import-untyped]
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
     _CRON_AVAILABLE = True
 except ImportError:
     _CRON_AVAILABLE = False
@@ -154,8 +155,7 @@ class FleuveUIBackend:
                         select(
                             self.event_model.workflow_id,
                             func.min(self.event_model.at).label("first_at"),
-                        )
-                        .group_by(self.event_model.workflow_id)
+                        ).group_by(self.event_model.workflow_id)
                     ).subquery()
                     date_filter = select(first_at_subq.c.workflow_id).select_from(
                         first_at_subq
@@ -180,9 +180,7 @@ class FleuveUIBackend:
                             )
                         except (ValueError, TypeError):
                             pass
-                    query = query.where(
-                        self.event_model.workflow_id.in_(date_filter)
-                    )
+                    query = query.where(self.event_model.workflow_id.in_(date_filter))
 
                 # Get workflow IDs
                 result = await s.execute(query.limit(limit).offset(offset))
@@ -381,9 +379,7 @@ class FleuveUIBackend:
             "/api/workflows/{workflow_id}/state-diff/{v1}/{v2}",
             response_model=Dict[str, Any],
         )
-        async def get_workflow_state_diff(
-            workflow_id: str, v1: int, v2: int
-        ):
+        async def get_workflow_state_diff(workflow_id: str, v1: int, v2: int):
             """Get workflow state at two versions for diff view."""
             async with self.session_maker() as s:
                 r1 = await s.execute(
@@ -563,8 +559,9 @@ class FleuveUIBackend:
 
                 if workflow_id:
                     query = query.where(self.activity_model.workflow_id == workflow_id)
-                if workflow_type:
-                    query = query.where(self.activity_model.workflow_type == workflow_type)
+                wf_type_col = getattr(self.activity_model, "workflow_type", None)
+                if workflow_type and wf_type_col is not None:
+                    query = query.where(wf_type_col == workflow_type)
                 if status:
                     query = query.where(self.activity_model.status == status)
 
@@ -660,8 +657,7 @@ class FleuveUIBackend:
                             now = datetime.now(tz)
                             cron = croniter(cron_expr, now)
                             next_fire_times = [
-                                cron.get_next(datetime)
-                                for _ in range(5)
+                                cron.get_next(datetime) for _ in range(5)
                             ]
                         except Exception:
                             next_fire_times = None
