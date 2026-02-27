@@ -137,6 +137,7 @@ See the [Step-by-Step Tutorial](#step-by-step-tutorial) for a complete working e
 
 ### Delays & Scheduling
 - **Time-based delays**: Schedule workflow steps to execute at specific times
+- **Cron schedules**: Recurring delays via cron expressions (e.g. `0 9 * * *` for daily at 9am) with timezone support
 - **Resume events**: Automatically resume workflows after delays
 - **Long-running workflows**: Support for workflows that span days or weeks
 
@@ -201,7 +202,7 @@ See the [Step-by-Step Tutorial](#step-by-step-tutorial) for a complete working e
 
 - **Python 3.13+**
 - **PostgreSQL 12+** (for event storage)
-- **NATS Server 2.9+** (for ephemeral state caching)
+- **NATS Server 2.9+** with JetStream (for ephemeral state caching; use `nats -js`)
 
 ### Using pip
 
@@ -239,7 +240,9 @@ docker run -d \
 psql -h localhost -U postgres -c "CREATE DATABASE fleuve;"
 ```
 
-#### NATS Server
+#### NATS Server (JetStream required)
+
+Fleuve uses NATS Key-Value for ephemeral state caching and requires JetStream. Start NATS with the `-js` flag:
 
 ```bash
 # Using Docker
@@ -1150,6 +1153,20 @@ app.include_router(gateway.router)
 
 When using **Fleuve UI**, pass `repos` and `command_parsers` to `create_app`; the gateway is mounted automatically at `/commands`.
 
+### Fleuve UI
+
+The Fleuve UI is a web dashboard for monitoring workflows, events, activities, delays, and more. Run it via the CLI:
+
+```bash
+# Build frontend (once)
+python scripts/build_ui.py
+
+# Start the UI server (default: http://0.0.0.0:8001)
+fleuve ui
+```
+
+Set `DATABASE_URL` and `NATS_URL` to point to your Fleuve database and NATS. The standalone UI uses default models and connects to any Fleuve database. For project-specific models, use the UI addon in your project (see `fleuve add ui`).
+
 ### Snapshots & Event Truncation
 
 Reduce event replay time and storage by enabling **automatic snapshots** and **event truncation**.
@@ -1228,7 +1245,9 @@ POST /api/workflows/{workflow_id}/simulate
 
 ### Delays and Scheduling
 
-Workflows can delay for a specified duration using `EvDelay` events:
+Workflows can delay for a specified duration using `EvDelay` events. Both one-shot and recurring (cron) delays are supported.
+
+#### One-shot delays
 
 ```python
 from fleuve.model import EvDelay, EvDelayComplete, EventBase
@@ -1244,35 +1263,49 @@ class EvReminderDelayComplete(EvDelayComplete):
 @staticmethod
 def decide(state: State | None, cmd: Command) -> list[Event] | Rejection:
     if isinstance(cmd, CmdScheduleReminder):
-        # Schedule a delay
+        # Schedule a one-shot delay
         delay_until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24)
         return [EvDelay(
-            type="reminder.delay",
+            id="reminder-1",
             delay_until=delay_until,
             next_cmd=CmdSendReminder(user_id=cmd.user_id)
         )]
     
     if isinstance(cmd, CmdSendReminder):
-        # This will be called after the delay
         return [EvReminderSent(user_id=cmd.user_id)]
     
     return Rejection()
+```
 
-# In your event_to_cmd method
-@classmethod
-def event_to_cmd(cls, e: ConsumedEvent) -> Command | None:
-    if isinstance(e.event, EvReminderDelayComplete):
-        # The delay scheduler will have stored the next_cmd
-        # which will be automatically processed
-        pass
-    return None
+#### Recurring delays (cron)
+
+Use `cron_expression` and `timezone` for recurring schedules. The DelayScheduler automatically re-inserts the next occurrence after each fire:
+
+```python
+# Daily at 9am UTC
+EvDelay(
+    id="daily-report",
+    delay_until=datetime.datetime.now(datetime.timezone.utc),  # first fire computed from cron
+    next_cmd=CmdGenerateReport(),
+    cron_expression="0 9 * * *",   # croniter-compatible (min hour day month weekday)
+    timezone="UTC"
+)
+
+# Every Monday at 8am in New York
+EvDelay(
+    id="weekly-sync",
+    delay_until=...,
+    next_cmd=CmdWeeklySync(),
+    cron_expression="0 8 * * 1",
+    timezone="America/New_York"
+)
 ```
 
 **How it works:**
-1. Workflow emits `EvDelay` event with `delay_until` timestamp and `next_cmd`
+1. Workflow emits `EvDelay` event with `delay_until`, `next_cmd`, and optionally `cron_expression` + `timezone`
 2. `DelayScheduler` detects the event and stores the schedule
-3. When time arrives, `DelayScheduler` emits `EvDelayComplete` event
-4. The stored `next_cmd` is automatically processed
+3. When time arrives, `DelayScheduler` emits `EvDelayComplete` event and processes `next_cmd`
+4. For cron schedules, the scheduler computes the next fire time and re-inserts the schedule; for one-shot delays, the schedule is removed
 
 ### Workflow Versioning / Schema Evolution
 

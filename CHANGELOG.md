@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Cron scheduling**: Recurring delays via `EvDelay.cron_expression` and `EvDelay.timezone`. Use croniter-compatible expressions (e.g. `0 9 * * *` for daily at 9am). The DelayScheduler automatically re-inserts the next occurrence after each fire. Fleuve UI displays next 5 cron fire times.
+- **Fleuve UI in main package**: Run `fleuve ui` from the CLI to start the web UI. Built-in default models allow connecting to any Fleuve database. Use `python scripts/build_ui.py` to build frontend assets.
 - **Command Gateway** (`FleuveCommandGateway`): HTTP API for workflow commands (create, process, pause, resume, cancel, retry failed action)
 - **Lifecycle Management**: `EvSystemPause`, `EvSystemResume`, `EvSystemCancel`; `StateBase.lifecycle`; `AsyncRepo.pause_workflow`, `resume_workflow`, `cancel_workflow`
 - **Workflow Versioning**: `schema_version` on StoredEvent, `Workflow.upcast()` for schema evolution
@@ -16,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Snapshots & Event Truncation**: Automatic state snapshots at configurable intervals; `TruncationService` for safe event deletion
 - **Event Replay & Simulate**: State reconstruction in UI API; POST `/api/workflows/{id}/replay` and `/simulate` endpoints
 - **Fleuve UI Command Gateway**: Mount command gateway in UI backend via `repos` and `command_parsers` in `create_app`
+
+### Changed
+- **NATS JetStream required**: Ephemeral state caching and delay scheduling require NATS with JetStream enabled. Use `nats -js` when starting NATS.
+- **zstandard**: Now an explicit dependency (used for encrypted event compression).
+- **httpx**: Added to dev dependencies for FastAPI TestClient in gateway tests.
 
 ## [0.1.0] - 2026-01-19
 
