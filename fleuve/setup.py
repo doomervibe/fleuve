@@ -181,10 +181,16 @@ async def create_workflow_runner(
     # Get configuration from environment or use defaults
     db_url: str = (
         database_url
-        or os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/fleuve")
+        or os.getenv(
+            "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/fleuve"
+        )
         or "postgresql+asyncpg://postgres:postgres@localhost/fleuve"
     )
-    nats_addr: str = nats_url or os.getenv("NATS_URL", "nats://localhost:4222") or "nats://localhost:4222"
+    nats_addr: str = (
+        nats_url
+        or os.getenv("NATS_URL", "nats://localhost:4222")
+        or "nats://localhost:4222"
+    )
 
     # Default bucket name from workflow
     if nats_bucket is None:
@@ -205,9 +211,13 @@ async def create_workflow_runner(
 
     try:
         # Create tiered ephemeral storage: L1 in-process LRU + L2 NATS KV
-        l1: InProcessEuphemeralStorage = InProcessEuphemeralStorage(max_size=max_cache_size)
+        l1: InProcessEuphemeralStorage = InProcessEuphemeralStorage(
+            max_size=max_cache_size
+        )
         l2: EuphStorageNATS = EuphStorageNATS(nc, nats_bucket, state_type)
-        ephemeral_storage: TieredEuphemeralStorage = TieredEuphemeralStorage(l1=l1, l2=l2)
+        ephemeral_storage: TieredEuphemeralStorage = TieredEuphemeralStorage(
+            l1=l1, l2=l2
+        )
         await ephemeral_storage.__aenter__()
 
         try:

@@ -736,7 +736,9 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
         # Optionally kick off a fresh command against the preserved state
         if new_cmd is not None:
-            result: tuple[StoredState[Any], list[Any]] | Rejection = await self.process_command(id, new_cmd)
+            result: tuple[StoredState[Any], list[Any]] | Rejection = (
+                await self.process_command(id, new_cmd)
+            )
             if isinstance(result, Rejection):
                 return result
             stored, _ = result
@@ -995,9 +997,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             )
         else:
             q = (
-                select(
-                    self.db_event_model.body, self.db_event_model.workflow_version
-                )
+                select(self.db_event_model.body, self.db_event_model.workflow_version)
                 .where(
                     self.db_event_model.workflow_id == id,
                     self.db_event_model.workflow_version > base_version,
