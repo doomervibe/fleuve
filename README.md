@@ -9,8 +9,27 @@
 
 
 
+## Why Fleuve? (vs Temporal)
+
+If you're considering [Temporal](https://temporal.io/) or similar workflow engines, here's how Fleuve differs:
+
+| | Fleuve | Temporal |
+|---|---|---|
+| **Architecture** | Event sourcing: events are the source of truth | Activity-based: state derived from activity execution |
+| **Infrastructure** | PostgreSQL + NATS (add to your existing stack) | Dedicated Temporal server or Temporal Cloud |
+| **Deployment** | Run as a Python app; no separate workflow service | Requires Temporal server(s) or managed cloud |
+| **Data ownership** | Events stored in your PostgreSQL; full SQL access | State in Temporal's storage; export for analytics |
+| **Event history** | Complete audit trail; time-travel debugging; replay at any version | History available via API |
+| **Type safety** | Pydantic-first; full mypy support | SDK types; less integrated with Python typing |
+| **Schema evolution** | Built-in `upcast()` for event schema migration | Versioning APIs |
+| **Cron / recurring** | Native cron expressions in delays | Workflow schedules |
+| **License** | MIT | Apache 2.0 (server) / proprietary (Cloud) |
+
+**Choose Fleuve when** you want event sourcing, own your data in PostgreSQL, prefer a lighter deployment (no dedicated workflow server), or need tight Python/Pydantic integration. **Choose Temporal when** you need multi-language workers, a managed cloud offering, or Temporal's broader ecosystem.
+
 ## Table of Contents
 
+- [Why Fleuve? (vs Temporal)](#why-fleuve-vs-temporal)
 - [Quick Start](#quick-start)
 - [Features](#features)
 - [Installation](#installation)
@@ -2071,7 +2090,7 @@ logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 - **Contributing**: See [CONTRIBUTING.md](./CONTRIBUTING.md) for contribution guidelines
 
 ### Related Projects
-- **Temporal**: Similar workflow framework (different language/approach)
+- **Temporal**: Similar workflow framework (different language/approach). See [Why Fleuve? (vs Temporal)](#why-fleuve-vs-temporal) for a comparison.
 - **The Workflow Pattern**: [Blog post](https://blog.bittacklr.be/the-workflow-pattern.html) that inspired Fleuve
 
 ### Built With
