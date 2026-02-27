@@ -85,6 +85,37 @@ class TestSideEffects:
         mock_delay_scheduler.register_delay.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_maybe_act_on_cron_delay_skips_register_delay(
+        self, side_effects, mock_delay_scheduler
+    ):
+        """EvDelay with cron_expression is synced from state; runner does not call register_delay."""
+        from pydantic import BaseModel
+        import datetime
+
+        class TestCmd(BaseModel):
+            action: str
+
+        cron_delay_event = EvDelay(
+            id="daily-report",
+            delay_until=datetime.datetime.now(),
+            next_cmd=TestCmd(action="report"),
+            cron_expression="0 9 * * *",
+            timezone="UTC",
+        )
+
+        consumed_event = ConsumedEvent(
+            workflow_id="wf-1",
+            event_no=1,
+            event=cron_delay_event,
+            global_id=1,
+            at=datetime.datetime.now(),
+            workflow_type="test_workflow",
+        )
+
+        await side_effects.maybe_act_on(consumed_event)
+        mock_delay_scheduler.register_delay.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_maybe_act_on_regular_event(self, side_effects, mock_action_executor):
         """Test handling regular events."""
         from pydantic import BaseModel

@@ -218,6 +218,7 @@ class TestRepoExternalSubscriptions:
     ):
         """When state has external_subscriptions, repo persists them to the external subscription table."""
         import uuid
+        from fleuve.model import EvExternalSubscriptionAdded
         from fleuve.tests.conftest import (
             TestCommand,
             TestEvent,
@@ -233,24 +234,29 @@ class TestRepoExternalSubscriptions:
         from fleuve.repo import AsyncRepo
         from fleuve.repo import EuphStorageNATS
 
-        # Workflow that adds external_subscriptions on first command
+        # Workflow that emits EvExternalSubscriptionAdded from decide
         class WorkflowWithExternalSubs(TestWorkflow):
             @staticmethod
             def decide(state, cmd):
                 if state is None:
-                    return [TestEvent(value=1)]
+                    return [
+                        TestEvent(value=1),
+                        EvExternalSubscriptionAdded(sub=ExternalSub(topic="order.created")),
+                        EvExternalSubscriptionAdded(sub=ExternalSub(topic="payment.done")),
+                    ]
                 return [Rejection()]
 
             @staticmethod
-            def evolve(state, event):
+            def is_final_event(e):
+                return isinstance(e, TestEvent) and e.value >= 100
+
+            @staticmethod
+            def _evolve(state, event):
                 if state is None:
                     return TestState(
                         counter=1,
                         subscriptions=[],
-                        external_subscriptions=[
-                            ExternalSub(topic="order.created"),
-                            ExternalSub(topic="payment.done"),
-                        ],
+                        external_subscriptions=[],
                     )
                 return TestState(
                     counter=state.counter + event.value,

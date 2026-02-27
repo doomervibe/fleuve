@@ -81,7 +81,7 @@ class CounterWorkflow(Workflow[EvCounterIncremented, CmdIncrementCounter, Counte
         return [EvCounterIncremented(amount=cmd.amount)]
     
     @staticmethod
-    def evolve(state: CounterState | None, event: EvCounterIncremented) -> CounterState:
+    def _evolve(state: CounterState | None, event: EvCounterIncremented) -> CounterState:
         if state is None:
             state = CounterState(subscriptions=[])
         state.count += event.amount
@@ -196,7 +196,7 @@ See the [Step-by-Step Tutorial](#step-by-step-tutorial) for a complete working e
 
 ### Snapshots & Event Truncation
 - **Automatic snapshots**: Periodic state snapshots at configurable intervals (e.g., every N events)
-- **Faster state load**: `load_state` uses snapshots to skip replaying old events
+- **Faster state load**: `load_state` uses snapshots to skip replaying old events; after truncation, state is reconstructed from the snapshot when no events remain
 - **Event truncation**: Background service safely deletes events covered by snapshots
 - **Retention controls**: Min retention period, reader offset awareness, batch limits
 
@@ -289,8 +289,8 @@ Understanding these core concepts is essential to working with Fleuve:
 - **Type-safe**: Full type hints ensure correctness at compile time
 
 **Workflow Methods:**
-- `decide(state, cmd)`: Process commands and emit events (pure function)
-- `evolve(state, event)`: Derive new state from events (pure function)
+- `decide(state, cmd)`: Process commands and emit events (pure function). Emit `EvSubscriptionAdded`, `EvSubscriptionRemoved`, etc. to manage subscriptions; emit `EvScheduleAdded`, `EvScheduleRemoved` for cron schedules.
+- `_evolve(state, event)`: Derive new state from events (pure function). You implement this; `evolve()` orchestrates system events (lifecycle, sync) and delegates to `_evolve` for domain events.
 - `event_to_cmd(event)`: Convert external events to commands
 - `is_final_event(event)`: Determine when workflow is complete
 
@@ -431,12 +431,12 @@ def decide(state: OrderState | None, cmd: CmdPlaceOrder) -> list[EvOrderPlaced] 
 - Should validate all business rules
 - Can emit multiple events
 
-#### `evolve(state, event) -> State`
-The evolution function applies an event to state to derive the new state.
+#### `_evolve(state, event) -> State`
+You implement `_evolve` to apply domain events to state. The framework's `evolve()` orchestrates system events (lifecycle, subscriptions, schedules) and delegates to your `_evolve` for domain events.
 
 ```python
 @staticmethod
-def evolve(state: OrderState | None, event: EvOrderPlaced | EvOrderShipped) -> OrderState:
+def _evolve(state: OrderState | None, event: EvOrderPlaced | EvOrderShipped) -> OrderState:
     # Initialize state if needed
     if state is None:
         state = OrderState(subscriptions=[])
@@ -455,9 +455,9 @@ def evolve(state: OrderState | None, event: EvOrderPlaced | EvOrderShipped) -> O
 ```
 
 **Key Points:**
-- `evolve` is a **pure function** (no side effects)
+- `_evolve` is a **pure function** (no side effects)
 - Always returns a new state
-- Must handle all event types
+- Handle only your domain event types (system events are handled by the framework)
 - Initialize state with `subscriptions=[]` if None
 
 #### `event_to_cmd(event) -> Command | None`
@@ -686,13 +686,20 @@ async with create_workflow_runner(
 
 ### Cross-Workflow Communication
 
-Workflows can subscribe to events from other workflows:
+Workflows subscribe to events from other workflows by emitting sync events from `decide()`:
 
 ```python
-# In OrderWorkflow.decide()
-state.subscriptions = [
-    Sub(event_type="payment.completed", workflow_id=f"payment-{order_id}")
-]
+from fleuve.model import Sub, EvSubscriptionAdded
+
+# In OrderWorkflow.decide() - emit EvSubscriptionAdded to add a subscription
+@staticmethod
+def decide(state: OrderState | None, cmd: CmdPlaceOrder) -> list[OrderEvent] | Rejection:
+    events = [EvOrderPlaced(...)]
+    events.append(EvSubscriptionAdded(sub=Sub(
+        event_type="payment.completed",
+        workflow_id=f"payment-{cmd.order_id}"
+    )))
+    return events
 
 # In OrderWorkflow.event_to_cmd()
 @classmethod
@@ -823,7 +830,7 @@ class OrderWorkflow(Workflow[OrderEvent, OrderCommand, OrderState, ConsumedEvent
         return Rejection(msg="Unknown command")
     
     @staticmethod
-    def evolve(state: OrderState | None, event: OrderEvent) -> OrderState:
+    def _evolve(state: OrderState | None, event: OrderEvent) -> OrderState:
         if state is None:
             state = OrderState(subscriptions=[])
         
@@ -1369,25 +1376,22 @@ body_raw: Mapped[dict] = mapped_column(JSONB, Computed("body", persisted=True), 
 
 ### Subscriptions (Cross-Workflow Communication)
 
-Workflows can subscribe to events from other workflows:
+Workflows subscribe to events by emitting `EvSubscriptionAdded` and `EvSubscriptionRemoved` from `decide()`. The system updates state and DB.
 
 ```python
-from fleuve.model import Sub
+from fleuve.model import Sub, EvSubscriptionAdded, EvSubscriptionRemoved
 
-# In OrderWorkflow
+# In decide() - emit sync events to add/remove subscriptions
 @staticmethod
 def decide(state: OrderState | None, cmd: CmdPlaceOrder) -> list[Event] | Rejection:
     events = [EvOrderPlaced(...)]
-    
-    # Subscribe to payment events
-    state.subscriptions = [
-        Sub(
-            event_type="payment.completed",
-            workflow_id=f"payment-{cmd.order_id}"
-        )
-    ]
-    
+    events.append(EvSubscriptionAdded(sub=Sub(
+        event_type="payment.completed",
+        workflow_id=f"payment-{cmd.order_id}"
+    )))
     return events
+
+# To remove: EvSubscriptionRemoved(sub=Sub(...))
 
 # In event_to_cmd - react to subscribed events
 @classmethod
@@ -1403,18 +1407,16 @@ def event_to_cmd(cls, e: ConsumedEvent) -> Command | None:
 **Subscription Patterns:**
 
 ```python
-# Subscribe to specific workflow
-Sub(event_type="payment.completed", workflow_id="payment-123")
+# Add subscription (emit from decide)
+EvSubscriptionAdded(sub=Sub(event_type="payment.completed", workflow_id="payment-123"))
+EvSubscriptionAdded(sub=Sub(event_type="*", workflow_id="payment-123"))  # all events from workflow
+EvSubscriptionAdded(sub=Sub(event_type="payment.completed", workflow_id="*"))  # event type from any workflow
 
-# Subscribe to all events from a workflow
-Sub(event_type="*", workflow_id="payment-123")
-
-# Subscribe to event type from any workflow
-Sub(event_type="payment.completed", workflow_id="*")
-
-# Subscribe to all events from all workflows (use carefully!)
-Sub(event_type="*", workflow_id="*")
+# Remove subscription
+EvSubscriptionRemoved(sub=Sub(event_type="payment.completed", workflow_id="payment-123"))
 ```
+
+**External subscriptions** (NATS topics): use `EvExternalSubscriptionAdded(sub=ExternalSub(topic="..."))` and `EvExternalSubscriptionRemoved(topic="...")`.
 
 ### Strongly consistent DB sync
 
@@ -1670,8 +1672,8 @@ Base class for workflow implementations.
 
 **Abstract Methods:**
 - `name() -> str`: Return unique workflow identifier
-- `decide(state, cmd) -> list[E] | Rejection`: Process command and return events
-- `evolve(state, event) -> S`: Apply event to state
+- `decide(state, cmd) -> list[E] | Rejection`: Process command and return events (emit `EvSubscriptionAdded`, `EvScheduleAdded`, etc. for sync)
+- `_evolve(state, event) -> S`: Apply domain event to state (you implement; system events handled by framework)
 - `event_to_cmd(event) -> C | None`: Convert external events to commands
 - `is_final_event(event) -> bool`: Check if event is terminal
 
@@ -1784,7 +1786,7 @@ cd examples/traffic_fine
 ### Workflow Design
 
 1. **Keep decide() pure**: No I/O, no side effects, only business logic
-2. **Keep evolve() pure**: Only derive state from events
+2. **Keep _evolve() pure**: Only derive state from domain events
 3. **Use descriptive event names**: Past tense, specific (e.g., `EvOrderPlaced`)
 4. **Include all data in events**: Events should be self-contained
 5. **Validate in decide()**: Reject invalid commands before emitting events
@@ -1813,7 +1815,7 @@ cd examples/traffic_fine
 ### Testing
 
 1. **Test decide() with unit tests**: Pure function, easy to test
-2. **Test evolve() with unit tests**: Pure function, easy to test
+2. **Test _evolve() with unit tests**: Pure function, easy to test
 3. **Test workflows end-to-end**: Integration tests with real database
 4. **Mock adapters for testing**: Test workflow logic separately from I/O
 
@@ -1835,7 +1837,7 @@ def test_order_workflow_decide():
 
 def test_order_workflow_evolve():
     event = EvOrderPlaced(order_id="123", customer_id="c1", total=100.0)
-    state = OrderWorkflow.evolve(None, event)
+    state = OrderWorkflow._evolve(None, event)
     assert state.order_id == "123"
     assert state.customer_id == "c1"
     assert state.total == 100.0
@@ -2031,7 +2033,7 @@ async with engine.begin() as conn:
 **Solutions**:
 1. Clear NATS cache for workflow
 2. Check ephemeral storage is connected
-3. Verify evolve() is implemented correctly
+3. Verify _evolve() is implemented correctly
 
 #### Actions Failing
 

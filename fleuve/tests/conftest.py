@@ -6,7 +6,7 @@ import asyncio
 import datetime
 import os
 import uuid
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +26,7 @@ os.environ["STORAGE_KEY"] = TEST_STORAGE_KEY
 
 from fleuve.model import (
     ActionContext,
+    EvDelay,
     EventBase,
     Rejection,
     RetryPolicy,
@@ -78,7 +79,7 @@ class TestWorkflow(Workflow[TestEvent, TestCommand, TestState, TestEvent]):
         return [TestEvent(value=cmd.value)]
 
     @staticmethod
-    def evolve(state: TestState | None, event: TestEvent) -> TestState:
+    def _evolve(state: TestState | None, event: TestEvent) -> TestState:
         if state is None:
             return TestState(
                 counter=event.value, subscriptions=[], external_subscriptions=[]
@@ -98,6 +99,68 @@ class TestWorkflow(Workflow[TestEvent, TestCommand, TestState, TestEvent]):
     @staticmethod
     def is_final_event(e: TestEvent) -> bool:
         return e.value >= 100
+
+
+# Workflow that can emit EvDelay with cron for hybrid schedule tests
+class ScheduleCronEvent(EvDelay[TestCommand]):
+    """Concrete EvDelay for schedule tests."""
+
+    type: Literal["schedule_cron"] = "schedule_cron"
+
+
+class ScheduleCronWorkflow(Workflow[
+    TestEvent | ScheduleCronEvent, TestCommand, TestState, TestEvent
+]):
+    """Workflow that emits EvDelay with cron for _sync_schedules tests."""
+
+    @classmethod
+    def name(cls) -> str:
+        return "schedule_cron_workflow"
+
+    @staticmethod
+    def decide(
+        state: TestState | None, cmd: TestCommand
+    ) -> list[TestEvent] | list[ScheduleCronEvent] | Rejection:
+        if cmd.value == 999:  # Sentinel: emit cron schedule
+            return [
+                ScheduleCronEvent(
+                    id="daily-report",
+                    delay_until=datetime.datetime.now(datetime.timezone.utc),
+                    next_cmd=cmd,
+                    cron_expression="0 9 * * *",
+                    timezone="UTC",
+                )
+            ]
+        if cmd.value < 0:
+            return Rejection()
+        return [TestEvent(value=cmd.value)]
+
+    @staticmethod
+    def _evolve(state: TestState | None, event: TestEvent | ScheduleCronEvent) -> TestState:
+        if isinstance(event, ScheduleCronEvent):
+            # _evolve_system handles EvDelay with cron; _evolve not called for that
+            return state or TestState(
+                counter=0, subscriptions=[], external_subscriptions=[]
+            )
+        if state is None:
+            return TestState(
+                counter=event.value, subscriptions=[], external_subscriptions=[]
+            )
+        return TestState(
+            counter=state.counter + event.value,
+            subscriptions=state.subscriptions,
+            external_subscriptions=state.external_subscriptions,
+        )
+
+    @classmethod
+    def event_to_cmd(cls, e: TestEvent | ScheduleCronEvent) -> TestCommand | None:
+        if isinstance(e, TestEvent) and e.value > 0:
+            return TestCommand(action="process", value=e.value)
+        return None
+
+    @staticmethod
+    def is_final_event(e: TestEvent | ScheduleCronEvent) -> bool:
+        return isinstance(e, TestEvent) and e.value >= 100
 
 
 # Database fixtures

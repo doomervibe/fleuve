@@ -37,7 +37,7 @@ class {{workflow_name}}(Workflow[
         return Rejection(msg="Unknown command")
 
     @staticmethod
-    def evolve(
+    def _evolve(
         state: {{state_name}} | None,
         event: {{project_title_no_spaces}}Event,
     ) -> {{state_name}}:

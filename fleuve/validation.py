@@ -99,26 +99,26 @@ def validate_workflow(workflow_class: Type[Workflow]) -> list[str]:
         except (ValueError, TypeError):
             pass
 
-    # 5. evolve() signature check
-    evolve = getattr(workflow_class, "evolve", None)
-    if evolve and callable(evolve):
+    # 5. _evolve() signature check
+    _evolve = getattr(workflow_class, "_evolve", None)
+    if _evolve and callable(_evolve):
         try:
-            sig = inspect.signature(evolve)
+            sig = inspect.signature(_evolve)
             params = list(sig.parameters.keys())
             expected = {"state", "event"}
             if not expected.issubset(set(params)):
                 errors.append(
-                    f"{name}.evolve() should have parameters 'state' and 'event', "
+                    f"{name}._evolve() should have parameters 'state' and 'event', "
                     f"found: {params}"
                 )
             hints = {}
             try:
-                hints = get_type_hints(evolve)
+                hints = get_type_hints(_evolve)
             except Exception:
                 pass
             if "return" not in hints:
                 errors.append(
-                    f"{name}.evolve() has no return type annotation (expected S)"
+                    f"{name}._evolve() has no return type annotation (expected S)"
                 )
         except (ValueError, TypeError):
             pass

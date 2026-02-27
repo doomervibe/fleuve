@@ -83,10 +83,20 @@ class ExternalSub(BaseModel):
     topic: str
 
 
+class Schedule(BaseModel):
+    """A cron schedule stored in workflow state (source of truth for recurring delays)."""
+
+    id: str
+    cron_expression: str
+    timezone: str | None = None
+    next_cmd: BaseModel
+
+
 class StateBase(BaseModel):
     subscriptions: list[Sub]
     external_subscriptions: list["ExternalSub"] = Field(default_factory=list)
     lifecycle: Literal["active", "paused", "cancelled"] = "active"
+    schedules: list[Schedule] = Field(default_factory=list)
 
 
 # Define type variables for generic typing
@@ -131,6 +141,13 @@ class EvDelay(EventBase, Generic[C], ABC):
     timezone: str | None = None  # IANA timezone name (e.g. "UTC", "America/New_York")
 
 
+class EvCancelSchedule(EventBase):
+    """Emitted by a workflow to cancel a recurring schedule by id."""
+
+    type: Literal["cancel_schedule"] = "cancel_schedule"
+    delay_id: str
+
+
 class EvActionCancel(EventBase):
     """Emitted by a workflow to cancel its in-flight actions."""
 
@@ -138,6 +155,48 @@ class EvActionCancel(EventBase):
     # If None or empty: cancel all actions for this workflow.
     # If non-empty: cancel only actions for these event versions (workflow_version = event_no).
     event_numbers: list[int] | None = None
+
+
+class EvSubscriptionAdded(EventBase):
+    """Emit from decide() to add a subscription. Updates state and DB."""
+
+    type: Literal["subscription_added"] = "subscription_added"
+    sub: Sub
+
+
+class EvSubscriptionRemoved(EventBase):
+    """Emit from decide() to remove a subscription. Updates state and DB."""
+
+    type: Literal["subscription_removed"] = "subscription_removed"
+    sub: Sub
+
+
+class EvExternalSubscriptionAdded(EventBase):
+    """Emit from decide() to add an external subscription. Updates state and DB."""
+
+    type: Literal["external_subscription_added"] = "external_subscription_added"
+    sub: "ExternalSub"
+
+
+class EvExternalSubscriptionRemoved(EventBase):
+    """Emit from decide() to remove an external subscription. Updates state and DB."""
+
+    type: Literal["external_subscription_removed"] = "external_subscription_removed"
+    topic: str
+
+
+class EvScheduleAdded(EventBase):
+    """Emit from decide() to add a cron schedule. Updates state and delay_schedule table."""
+
+    type: Literal["schedule_added"] = "schedule_added"
+    schedule: Schedule
+
+
+class EvScheduleRemoved(EventBase):
+    """Emit from decide() to remove a cron schedule. Updates state and delay_schedule table."""
+
+    type: Literal["schedule_removed"] = "schedule_removed"
+    delay_id: str
 
 
 class EvSystemPause(EventBase):
@@ -202,31 +261,132 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
 
     @classmethod
     def evolve_(cls, state: S | None, events: list[E]) -> S:
+        """Evolve state through events. Does not emit sync events."""
         for e in events:
-            state = cls._evolve_system(state, e) or cls.evolve(state, e)
-
+            state = cls.evolve(state, e)
         assert state
         return state
 
     @classmethod
+    def evolve(cls, state: S | None, event: E) -> S:
+        """Orchestrates evolution: system events first, then user _evolve."""
+        result = cls._evolve_system(state, event)
+        if result is not None:
+            return result
+        return cls._evolve(state, event)
+
+    @staticmethod
+    def _sub_matches(a: Sub, b: Sub) -> bool:
+        return (
+            a.workflow_id == b.workflow_id
+            and a.event_type == b.event_type
+            and (a.tags or []) == (b.tags or [])
+            and (a.tags_all or []) == (b.tags_all or [])
+        )
+
+    @classmethod
     def _evolve_system(cls, state: S | None, event: E) -> S | None:
         """Handle system lifecycle events. Returns new state or None if not a system event."""
+        # Lifecycle events
+        new_lifecycle: Literal["active", "paused", "cancelled"] | None = None
         if isinstance(event, EvSystemPause):
-            new_lifecycle: Literal["active", "paused", "cancelled"] = "paused"
+            new_lifecycle = "paused"
         elif isinstance(event, EvSystemResume):
             new_lifecycle = "active"
         elif isinstance(event, EvSystemCancel):
-            new_lifecycle = "cancelled"
+            if state is None:
+                return StateBase(
+                    subscriptions=[],
+                    external_subscriptions=[],
+                    lifecycle="cancelled",
+                    schedules=[],
+                )  # type: ignore[return-value]
+            return state.model_copy(
+                update={"lifecycle": "cancelled", "schedules": []}
+            )
         elif isinstance(event, EvContinueAsNew):
             # State is preserved; the event log is reset in repo.continue_as_new.
             return state  # type: ignore[return-value]
-        else:
-            return None
-        if state is None:
-            return StateBase(
-                subscriptions=[], external_subscriptions=[], lifecycle=new_lifecycle
-            )  # type: ignore[return-value]
-        return state.model_copy(update={"lifecycle": new_lifecycle})
+
+        # Sync events (user emits from decide; update state)
+        if isinstance(event, EvSubscriptionAdded):
+            if state is None:
+                return StateBase(
+                    subscriptions=[event.sub],
+                    external_subscriptions=[],
+                    lifecycle="active",
+                    schedules=[],
+                )  # type: ignore[return-value]
+            new_subs = state.subscriptions + [event.sub]
+            return state.model_copy(update={"subscriptions": new_subs})
+        if isinstance(event, EvSubscriptionRemoved):
+            if state is None:
+                return None
+            new_subs = [s for s in state.subscriptions if not cls._sub_matches(s, event.sub)]
+            return state.model_copy(update={"subscriptions": new_subs})
+        if isinstance(event, EvExternalSubscriptionAdded):
+            if state is None:
+                return StateBase(
+                    subscriptions=[],
+                    external_subscriptions=[event.sub],
+                    lifecycle="active",
+                    schedules=[],
+                )  # type: ignore[return-value]
+            new_ext = state.external_subscriptions + [event.sub]
+            return state.model_copy(update={"external_subscriptions": new_ext})
+        if isinstance(event, EvExternalSubscriptionRemoved):
+            if state is None:
+                return None
+            new_ext = [x for x in state.external_subscriptions if x.topic != event.topic]
+            return state.model_copy(update={"external_subscriptions": new_ext})
+        if isinstance(event, EvScheduleAdded):
+            if state is None:
+                return StateBase(
+                    subscriptions=[],
+                    external_subscriptions=[],
+                    lifecycle="active",
+                    schedules=[event.schedule],
+                )  # type: ignore[return-value]
+            new_sched = [x for x in state.schedules if x.id != event.schedule.id] + [
+                event.schedule
+            ]
+            return state.model_copy(update={"schedules": new_sched})
+        if isinstance(event, EvScheduleRemoved):
+            if state is None:
+                return None
+            new_sched = [x for x in state.schedules if x.id != event.delay_id]
+            return state.model_copy(update={"schedules": new_sched})
+
+        # Cron schedule events (EvDelay with cron, EvCancelSchedule)
+        if isinstance(event, EvDelay) and event.cron_expression:
+            sched = Schedule(
+                id=event.id,
+                cron_expression=event.cron_expression,
+                timezone=event.timezone,
+                next_cmd=event.next_cmd,
+            )
+            if state is None:
+                return StateBase(
+                    subscriptions=[],
+                    external_subscriptions=[],
+                    lifecycle="active",
+                    schedules=[sched],
+                )  # type: ignore[return-value]
+            new_schedules = [x for x in state.schedules if x.id != event.id] + [sched]
+            return state.model_copy(update={"schedules": new_schedules})
+        if isinstance(event, EvCancelSchedule):
+            if state is None:
+                return None
+            new_schedules = [x for x in state.schedules if x.id != event.delay_id]
+            return state.model_copy(update={"schedules": new_schedules})
+
+        if new_lifecycle is not None:
+            if state is None:
+                return StateBase(
+                    subscriptions=[], external_subscriptions=[], lifecycle=new_lifecycle
+                )  # type: ignore[return-value]
+            return state.model_copy(update={"lifecycle": new_lifecycle})
+        return None
 
     @staticmethod
     @abstractmethod
@@ -235,7 +395,8 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
 
     @staticmethod
     @abstractmethod
-    def evolve(state: S | None, event: E) -> S:
+    def _evolve(state: S | None, event: E) -> S:
+        """User-implemented state evolution for workflow events. Called when event is not a system event."""
         pass
 
     @classmethod

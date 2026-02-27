@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sync events for subscriptions and schedules**: Emit `EvSubscriptionAdded`, `EvSubscriptionRemoved`, `EvExternalSubscriptionAdded`, `EvExternalSubscriptionRemoved`, `EvScheduleAdded`, `EvScheduleRemoved` from `decide()` to manage subscriptions and cron schedules. The repo syncs these to DB tables; `_evolve_system` updates state.
 - **Cron scheduling**: Recurring delays via `EvDelay.cron_expression` and `EvDelay.timezone`. Use croniter-compatible expressions (e.g. `0 9 * * *` for daily at 9am). The DelayScheduler automatically re-inserts the next occurrence after each fire. Fleuve UI displays next 5 cron fire times.
 - **Fleuve UI in main package**: Run `fleuve ui` from the CLI to start the web UI. Built-in default models allow connecting to any Fleuve database. Use `python scripts/build_ui.py` to build frontend assets.
 - **Command Gateway** (`FleuveCommandGateway`): HTTP API for workflow commands (create, process, pause, resume, cancel, retry failed action)
@@ -20,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fleuve UI Command Gateway**: Mount command gateway in UI backend via `repos` and `command_parsers` in `create_app`
 
 ### Changed
+- **evolve vs _evolve**: User implements `_evolve(state, event)` for domain events; `evolve()` orchestrates system events (lifecycle, sync) and delegates to `_evolve`.
+- **load_state after truncation**: When all events after a snapshot are truncated, `load_state` correctly returns state from the snapshot (fixes `UnboundLocalError`).
 - **NATS JetStream required**: Ephemeral state caching and delay scheduling require NATS with JetStream enabled. Use `nats -js` when starting NATS.
 - **zstandard**: Now an explicit dependency (used for encrypted event compression).
 - **httpx**: Added to dev dependencies for FastAPI TestClient in gateway tests.

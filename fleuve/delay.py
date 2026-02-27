@@ -14,6 +14,31 @@ from fleuve.postgres import DelaySchedule, StoredEvent
 
 logger = logging.getLogger(__name__)
 
+
+def next_cron_fire(
+    cron_expression: str, timezone_name: str | None
+) -> datetime.datetime | None:
+    """Compute the next fire time for a cron expression.
+
+    Returns a timezone-aware datetime, or None if the expression is invalid.
+    """
+    try:
+        try:
+            tz = ZoneInfo(timezone_name or "UTC")
+        except ZoneInfoNotFoundError:
+            logger.warning(f"Unknown timezone '{timezone_name}', falling back to UTC")
+            tz = ZoneInfo("UTC")
+
+        now = datetime.datetime.now(tz)
+        cron = croniter(cron_expression, now)
+        next_dt: datetime.datetime = cron.get_next(datetime.datetime)
+        if next_dt.tzinfo is None:
+            next_dt = next_dt.replace(tzinfo=tz)
+        return next_dt
+    except Exception as e:
+        logger.error(f"Error computing cron next fire: {e}")
+        return None
+
 C = TypeVar("C", bound=BaseModel)  # Command type
 Se = TypeVar("Se", bound=StoredEvent)  # StoredEvent subclass type
 Ds = TypeVar("Ds", bound=DelaySchedule)  # DelaySchedule subclass type
@@ -106,29 +131,8 @@ class DelayScheduler(Generic[C, Se, Ds]):
     def _next_cron_fire(
         self, cron_expression: str, timezone_name: str | None
     ) -> datetime.datetime | None:
-        """Compute the next fire time for a cron expression.
-
-        Returns a timezone-aware datetime, or None if the expression is invalid.
-        """
-        try:
-            try:
-                tz = ZoneInfo(timezone_name or "UTC")
-            except ZoneInfoNotFoundError:
-                logger.warning(
-                    f"Unknown timezone '{timezone_name}', falling back to UTC"
-                )
-                tz = ZoneInfo("UTC")
-
-            now = datetime.datetime.now(tz)
-            cron = croniter(cron_expression, now)
-            next_dt: datetime.datetime = cron.get_next(datetime.datetime)
-            # Ensure the result is timezone-aware
-            if next_dt.tzinfo is None:
-                next_dt = next_dt.replace(tzinfo=tz)
-            return next_dt
-        except Exception as e:
-            logger.error(f"Error computing cron next fire: {e}")
-            return None
+        """Compute the next fire time for a cron expression."""
+        return next_cron_fire(cron_expression, timezone_name)
 
     async def _run_loop(self):
         """Main loop that checks for workflows that should resume."""

@@ -25,7 +25,13 @@ from fleuve.repo import (
 
 
 # Use test models from conftest
-from fleuve.tests.conftest import TestCommand, TestEvent, TestState, TestWorkflow
+from fleuve.tests.conftest import (
+    ScheduleCronWorkflow,
+    TestCommand,
+    TestEvent,
+    TestState,
+    TestWorkflow,
+)
 
 # Aliases for backward compatibility
 MockState = TestState
@@ -927,6 +933,47 @@ class TestAsyncRepo:
             "wf-lifecycle-1", TestCommand(action="update", value=5)
         )
         assert not isinstance(result3, Rejection)
+
+    @pytest.mark.asyncio
+    async def test_sync_schedules_cron_to_delay_table(
+        self,
+        test_session_maker,
+        ephemeral_storage,
+        test_event_model,
+        test_subscription_model,
+        test_delay_schedule_model,
+        test_session,
+        clean_tables,
+    ):
+        """Hybrid cron: state.schedules is synced to delay_schedule table."""
+        repo = AsyncRepo(
+            session_maker=test_session_maker,
+            es=ephemeral_storage,
+            model=ScheduleCronWorkflow,
+            db_event_model=test_event_model,
+            db_sub_model=test_subscription_model,
+            db_delay_schedule_model=test_delay_schedule_model,
+        )
+
+        # Command value 999 triggers ScheduleCronEvent (EvDelay with cron)
+        cmd = TestCommand(action="schedule", value=999)
+        result = await repo.create_new(cmd, "wf-schedule-1")
+
+        assert not isinstance(result, Rejection)
+        assert len(result.state.schedules) == 1
+        assert result.state.schedules[0].id == "daily-report"
+        assert result.state.schedules[0].cron_expression == "0 9 * * *"
+
+        # Verify delay_schedule table was populated by _sync_schedules
+        row = await test_session.scalar(
+            select(test_delay_schedule_model)
+            .where(test_delay_schedule_model.workflow_id == "wf-schedule-1")
+            .where(test_delay_schedule_model.delay_id == "daily-report")
+        )
+        assert row is not None
+        assert row.cron_expression == "0 9 * * *"
+        assert row.timezone == "UTC"
+        assert row.workflow_type == "schedule_cron_workflow"
 
     @pytest.mark.asyncio
     async def test_cancel_workflow(

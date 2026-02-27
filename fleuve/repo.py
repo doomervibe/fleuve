@@ -18,13 +18,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from typing_extensions import Self
 
+from fleuve.delay import next_cron_fire
 from fleuve.model import (
     AlreadyExists,
     EvContinueAsNew,
+    EvExternalSubscriptionAdded,
+    EvExternalSubscriptionRemoved,
+    EvScheduleAdded,
+    EvScheduleRemoved,
+    EvSubscriptionAdded,
+    EvSubscriptionRemoved,
     EvSystemCancel,
     EvSystemPause,
     EvSystemResume,
     Rejection,
+    Schedule,
     StateBase,
     Workflow,
 )
@@ -311,10 +319,10 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                     return events
 
                 # Evolve the state with the new events
-                new_state: S = self.model.evolve_(old.state, events)
+                new_state = self.model.evolve_(old.state, events)
 
-                await self._handle_subscriptions(old.state, new_state, s, id)
-                await self._handle_external_subscriptions(old.state, new_state, s, id)
+                new_version = old.version + len(events)
+                await self._handle_sync_events_from_decide(s, id, old.version, events)
 
                 if self._sync_db_handler:
                     await self._sync_db_handler(s, id, old.state, new_state, events)
@@ -344,7 +352,6 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                         )
                     )
 
-                    new_version = old.version + len(events)
                     await self._maybe_snapshot(s, id, new_state, new_version)
 
                     await s.commit()
@@ -360,97 +367,166 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             await self._es.put_state(new)
         return new, events
 
-    async def _handle_subscriptions(
-        self, old_state: S | None, new_state: S, s: AsyncSession, workflow_id: str
-    ):
-        if old_state is not None and old_state.subscriptions is new_state.subscriptions:
-            return
-        if (old_state is None and new_state.subscriptions) or (
-            old_state and old_state.subscriptions != new_state.subscriptions
-        ):
-            c = await s.execute(
-                select(self.db_sub_model).where(
-                    self.db_sub_model.workflow_id == workflow_id
-                )
-            )
-            existing = set[tuple[str, str, tuple[str, ...], tuple[str, ...]]](
-                (
-                    i.subscribed_to_workflow,
-                    i.subscribed_to_event_type,
-                    tuple(i.tags or []),
-                    tuple(i.tags_all or []),
-                )
-                for i in c.fetchall()
-            )
-            new = set[tuple[str, str, tuple[str, ...], tuple[str, ...]]](
-                (i.workflow_id, i.event_type, tuple(i.tags), tuple(i.tags_all))
-                for i in new_state.subscriptions
-            )
-            for i in existing:
-                if i not in new:
-                    await s.execute(
-                        delete(self.db_sub_model)
-                        .where(self.db_sub_model.workflow_id == workflow_id)
-                        .where(self.db_sub_model.subscribed_to_event_type == i[1])
-                        .where(self.db_sub_model.subscribed_to_workflow == i[0])
-                        .where(self.db_sub_model.tags == list(i[2]))
-                        .where(self.db_sub_model.tags_all == list(i[3]))
-                    )
-            for i in new:
-                if i not in existing:
-                    await s.execute(
-                        insert(self.db_sub_model).values(
-                            dict(
-                                workflow_id=workflow_id,
-                                workflow_type=self._workflow_type,
-                                subscribed_to_event_type=i[1],
-                                subscribed_to_workflow=i[0],
-                                tags=list(i[2]),
-                                tags_all=list(i[3]),
-                            )
-                        )
-                    )
+    async def _handle_sync_events_from_decide(
+        self,
+        s: AsyncSession,
+        workflow_id: str,
+        base_version: int,
+        events: list[E],
+    ) -> None:
+        """Process sync events emitted by user's decide(). No state comparison."""
+        from fleuve.model import EvCancelSchedule, EvDelay, EvSystemCancel
 
-    async def _handle_external_subscriptions(
-        self, old_state: S | None, new_state: S, s: AsyncSession, workflow_id: str
-    ):
+        for i, ev in enumerate(events):
+            event_version = base_version + i + 1
+            if isinstance(ev, EvSubscriptionAdded):
+                await self._handle_subscription_added(s, workflow_id, ev)
+            elif isinstance(ev, EvSubscriptionRemoved):
+                await self._handle_subscription_removed(s, workflow_id, ev)
+            elif isinstance(ev, EvExternalSubscriptionAdded):
+                await self._handle_external_subscription_added(s, workflow_id, ev)
+            elif isinstance(ev, EvExternalSubscriptionRemoved):
+                await self._handle_external_subscription_removed(s, workflow_id, ev)
+            elif isinstance(ev, EvScheduleAdded):
+                await self._handle_schedule_added(s, workflow_id, ev, event_version)
+            elif isinstance(ev, EvScheduleRemoved):
+                await self._handle_schedule_removed(s, workflow_id, ev)
+            elif isinstance(ev, EvDelay) and ev.cron_expression:
+                sched = Schedule(
+                    id=ev.id,
+                    cron_expression=ev.cron_expression,
+                    timezone=ev.timezone,
+                    next_cmd=ev.next_cmd,
+                )
+                await self._handle_schedule_added(
+                    s, workflow_id, EvScheduleAdded(schedule=sched), event_version
+                )
+            elif isinstance(ev, EvCancelSchedule):
+                await self._handle_schedule_removed(
+                    s, workflow_id, EvScheduleRemoved(delay_id=ev.delay_id)
+                )
+            elif isinstance(ev, EvSystemCancel):
+                await self._handle_schedules_cleared(s, workflow_id)
+
+    async def _handle_subscription_added(
+        self, s: AsyncSession, workflow_id: str, event: EvSubscriptionAdded
+    ) -> None:
+        """Insert a single subscription."""
+        sub = event.sub
+        await s.execute(
+            insert(self.db_sub_model).values(
+                dict(
+                    workflow_id=workflow_id,
+                    workflow_type=self._workflow_type,
+                    subscribed_to_event_type=sub.event_type,
+                    subscribed_to_workflow=sub.workflow_id,
+                    tags=sub.tags,
+                    tags_all=sub.tags_all,
+                )
+            )
+        )
+
+    async def _handle_subscription_removed(
+        self, s: AsyncSession, workflow_id: str, event: EvSubscriptionRemoved
+    ) -> None:
+        """Delete a single subscription."""
+        sub = event.sub
+        await s.execute(
+            delete(self.db_sub_model)
+            .where(self.db_sub_model.workflow_id == workflow_id)
+            .where(self.db_sub_model.subscribed_to_event_type == sub.event_type)
+            .where(self.db_sub_model.subscribed_to_workflow == sub.workflow_id)
+            .where(self.db_sub_model.tags == (sub.tags or []))
+            .where(self.db_sub_model.tags_all == (sub.tags_all or []))
+        )
+
+    async def _handle_external_subscription_added(
+        self, s: AsyncSession, workflow_id: str, event: EvExternalSubscriptionAdded
+    ) -> None:
+        """Insert a single external subscription."""
         if not self.db_external_sub_model:
             return
-        old_ext = (
-            getattr(old_state, "external_subscriptions", None) if old_state else None
-        )
-        new_ext = getattr(new_state, "external_subscriptions", None)
-        if old_ext is not None and old_ext is new_ext:
-            return
-        external_subs = new_ext or []
-        if (old_state is None and external_subs) or (
-            old_state and (old_ext or []) != external_subs
-        ):
-            c = await s.execute(
-                select(self.db_external_sub_model).where(
-                    self.db_external_sub_model.workflow_id == workflow_id
+        ext = event.sub
+        await s.execute(
+            insert(self.db_external_sub_model).values(
+                dict(
+                    workflow_id=workflow_id,
+                    workflow_type=self._workflow_type,
+                    topic=ext.topic,
                 )
             )
-            existing = set(row[0].topic for row in c.fetchall())
-            new = set(ext.topic for ext in external_subs)
-            for topic in existing:
-                if topic not in new:
-                    await s.execute(
-                        delete(self.db_external_sub_model)
-                        .where(self.db_external_sub_model.workflow_id == workflow_id)
-                        .where(self.db_external_sub_model.topic == topic)
-                    )
-            for topic in new:
-                if topic not in existing:
-                    await s.execute(
-                        insert(self.db_external_sub_model).values(
-                            dict(
-                                workflow_id=workflow_id,
-                                workflow_type=self._workflow_type,
-                                topic=topic,
-                            )
-                        )
-                    )
+        )
+
+    async def _handle_external_subscription_removed(
+        self, s: AsyncSession, workflow_id: str, event: EvExternalSubscriptionRemoved
+    ) -> None:
+        """Delete a single external subscription."""
+        if not self.db_external_sub_model:
+            return
+        await s.execute(
+            delete(self.db_external_sub_model)
+            .where(self.db_external_sub_model.workflow_id == workflow_id)
+            .where(self.db_external_sub_model.topic == event.topic)
+        )
+
+    async def _handle_schedule_added(
+        self,
+        s: AsyncSession,
+        workflow_id: str,
+        event: EvScheduleAdded,
+        event_version: int,
+    ) -> None:
+        """Insert a single cron schedule."""
+        if self._db_delay_schedule_model is None:
+            return
+        sch = event.schedule
+        delay_until = next_cron_fire(sch.cron_expression, sch.timezone)
+        if delay_until is None:
+            logger.warning(
+                "Skipping invalid cron schedule %s for workflow %s",
+                sch.id,
+                workflow_id,
+            )
+            return
+        await s.execute(
+            insert(self._db_delay_schedule_model).values(
+                {
+                    "workflow_id": workflow_id,
+                    "delay_id": sch.id,
+                    "workflow_type": self._workflow_type,
+                    "delay_until": delay_until,
+                    "event_version": event_version,
+                    "next_command": sch.next_cmd,
+                    "cron_expression": sch.cron_expression,
+                    "timezone": sch.timezone,
+                }
+            )
+        )
+
+    async def _handle_schedule_removed(
+        self, s: AsyncSession, workflow_id: str, event: EvScheduleRemoved
+    ) -> None:
+        """Delete a single cron schedule."""
+        if self._db_delay_schedule_model is None:
+            return
+        await s.execute(
+            delete(self._db_delay_schedule_model)
+            .where(self._db_delay_schedule_model.workflow_id == workflow_id)
+            .where(self._db_delay_schedule_model.delay_id == event.delay_id)
+            .where(self._db_delay_schedule_model.cron_expression.isnot(None))
+        )
+
+    async def _handle_schedules_cleared(
+        self, s: AsyncSession, workflow_id: str
+    ) -> None:
+        """Delete all cron schedules for workflow (EvSystemCancel)."""
+        if self._db_delay_schedule_model is None:
+            return
+        await s.execute(
+            delete(self._db_delay_schedule_model)
+            .where(self._db_delay_schedule_model.workflow_id == workflow_id)
+            .where(self._db_delay_schedule_model.cron_expression.isnot(None))
+        )
 
     async def _maybe_snapshot(
         self, s: AsyncSession, workflow_id: str, state: StateBase, version: int
@@ -503,8 +579,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                         )
                     )
 
-                await self._handle_subscriptions(None, state, s, id)
-                await self._handle_external_subscriptions(None, state, s, id)
+                await self._handle_sync_events_from_decide(s, id, 0, events)
 
                 if self._sync_db_handler:
                     await self._sync_db_handler(s, id, None, state, events)
@@ -1040,7 +1115,10 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             ):
                 return None  # Workflow completed (but not cancelled - cancelled needs state for lifecycle checks)
 
-        state = self.model.evolve_(base_state, event_bodies)
+            state = self.model.evolve_(base_state, event_bodies)
+        else:
+            state = base_state
+        assert state is not None  # guaranteed: early return when both rows and base_state empty
         return StoredState(state=state, id=id, version=version)
 
     async def hydrate_state_(self, id: str) -> StoredState[S] | None:

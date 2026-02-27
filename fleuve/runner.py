@@ -249,11 +249,14 @@ class SideEffects:
             )
             return
         if isinstance(event.event, EvDelay):
-            await self.delay_scheduler.register_delay(
-                workflow_id=event.workflow_id,
-                delay_event=event.event,
-                event_version=event.event_no,
-            )
+            # One-shot delays: register via DelayScheduler. Cron schedules are
+            # stored in state.schedules and synced to delay_schedule by the repo.
+            if event.event.cron_expression is None:
+                await self.delay_scheduler.register_delay(
+                    workflow_id=event.workflow_id,
+                    delay_event=event.event,
+                    event_version=event.event_no,
+                )
         if self.action_executor.to_be_act_on(event):
             await self.action_executor.execute_action(event)
 

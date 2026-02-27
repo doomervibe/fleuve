@@ -14,14 +14,12 @@ include .coveragerc
 
 # Include all Python source files
 recursive-include fleuve *.py
-recursive-include fleuve_ui *.py
 
 # Include type checking marker
 include fleuve/py.typed
 
 # Exclude test files from distribution
 recursive-exclude fleuve/tests *
-recursive-exclude fleuve_ui/backend/tests *
 
 # Exclude examples from main distribution (they're separate)
 recursive-exclude examples *
@@ -29,7 +27,6 @@ recursive-exclude examples *
 # Exclude development files
 exclude .gitignore
 recursive-exclude .github *
-recursive-exclude fleuve_ui/frontend *
 
 # Exclude build artifacts and caches
 global-exclude __pycache__

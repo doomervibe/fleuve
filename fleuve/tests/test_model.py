@@ -7,16 +7,19 @@ from abc import ABC
 from typing import Literal
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from fleuve.model import (
     ActionContext,
     EventBase,
+    EvCancelSchedule,
     EvDelay,
     EvDelayComplete,
     EvDirectMessage,
+    EvSystemCancel,
     Rejection,
     RetryPolicy,
+    Schedule,
     StateBase,
     Workflow,
 )
@@ -228,7 +231,7 @@ class TestWorkflow:
 
         state = TestState(counter=10, subscriptions=[])
         event = TestEvent(value=5)
-        new_state = test_workflow.evolve(state, event)
+        new_state = test_workflow._evolve(state, event)
         assert new_state.counter == 15
 
     def test_workflow_is_final_event(self, test_workflow):
@@ -292,3 +295,97 @@ class TestRejection:
         """Test creating a rejection."""
         rejection = Rejection()
         assert isinstance(rejection, Rejection)
+
+
+class TestHybridScheduleEvolve:
+    """Tests for hybrid cron schedule handling in _evolve_system."""
+
+    def test_ev_delay_with_cron_adds_schedule_to_state(self):
+        """EvDelay with cron_expression adds Schedule to state.schedules."""
+        from fleuve.tests.conftest import TestCommand, TestState, TestWorkflow
+
+        class ConcreteEvDelay(EvDelay[TestCommand]):
+            type: Literal["ev_delay"] = "ev_delay"
+
+        state = TestState(
+            counter=0, subscriptions=[], external_subscriptions=[], schedules=[]
+        )
+        ev = ConcreteEvDelay(
+            id="daily-report",
+            delay_until=datetime.datetime.now(datetime.timezone.utc),
+            next_cmd=TestCommand(action="report", value=1),
+            cron_expression="0 9 * * *",
+            timezone="UTC",
+        )
+        new_state = TestWorkflow.evolve_(state, [ev])
+        assert len(new_state.schedules) == 1
+        assert new_state.schedules[0].id == "daily-report"
+        assert new_state.schedules[0].cron_expression == "0 9 * * *"
+        assert new_state.schedules[0].timezone == "UTC"
+        assert new_state.schedules[0].next_cmd.action == "report"
+
+    def test_ev_delay_without_cron_does_not_add_schedule(self):
+        """EvDelay without cron_expression does not add to schedules (handled by evolve)."""
+        from fleuve.tests.conftest import TestCommand, TestState, TestWorkflow
+
+        class ConcreteEvDelay(EvDelay[TestCommand]):
+            type: Literal["ev_delay"] = "ev_delay"
+
+        state = TestState(
+            counter=0, subscriptions=[], external_subscriptions=[], schedules=[]
+        )
+        ev = ConcreteEvDelay(
+            id="one-shot",
+            delay_until=datetime.datetime.now(datetime.timezone.utc),
+            next_cmd=TestCommand(action="x", value=1),
+            cron_expression=None,
+        )
+        # _evolve_system returns None for EvDelay without cron; evolve() is called
+        # TestWorkflow.evolve expects TestEvent, so we need a workflow that handles this
+        # For simplicity: _evolve_system returns None, so evolve is called - but TestWorkflow
+        # evolve expects TestEvent. So we'd get an error. Let's verify _evolve_system returns None.
+        result = TestWorkflow._evolve_system(state, ev)
+        assert result is None
+
+    def test_ev_cancel_schedule_removes_from_state(self):
+        """EvCancelSchedule removes schedule by delay_id from state.schedules."""
+        from fleuve.tests.conftest import TestCommand, TestState, TestWorkflow
+
+        sched = Schedule(
+            id="to-cancel",
+            cron_expression="0 9 * * *",
+            timezone="UTC",
+            next_cmd=TestCommand(action="x", value=1),
+        )
+        state = TestState(
+            counter=0,
+            subscriptions=[],
+            external_subscriptions=[],
+            schedules=[sched],
+        )
+        ev = EvCancelSchedule(delay_id="to-cancel")
+        new_state = TestWorkflow._evolve_system(state, ev)
+        assert new_state is not None
+        assert len(new_state.schedules) == 0
+
+    def test_ev_system_cancel_clears_schedules(self):
+        """EvSystemCancel clears state.schedules."""
+        from fleuve.tests.conftest import TestCommand, TestState, TestWorkflow
+
+        sched = Schedule(
+            id="s1",
+            cron_expression="0 9 * * *",
+            timezone="UTC",
+            next_cmd=TestCommand(action="x", value=1),
+        )
+        state = TestState(
+            counter=0,
+            subscriptions=[],
+            external_subscriptions=[],
+            schedules=[sched],
+        )
+        ev = EvSystemCancel(reason="test")
+        new_state = TestWorkflow._evolve_system(state, ev)
+        assert new_state is not None
+        assert new_state.lifecycle == "cancelled"
+        assert len(new_state.schedules) == 0
