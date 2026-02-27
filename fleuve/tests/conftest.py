@@ -108,9 +108,9 @@ class ScheduleCronEvent(EvDelay[TestCommand]):
     type: Literal["schedule_cron"] = "schedule_cron"
 
 
-class ScheduleCronWorkflow(Workflow[
-    TestEvent | ScheduleCronEvent, TestCommand, TestState, TestEvent
-]):
+class ScheduleCronWorkflow(
+    Workflow[TestEvent | ScheduleCronEvent, TestCommand, TestState, TestEvent]
+):
     """Workflow that emits EvDelay with cron for _sync_schedules tests."""
 
     @classmethod
@@ -120,7 +120,7 @@ class ScheduleCronWorkflow(Workflow[
     @staticmethod
     def decide(
         state: TestState | None, cmd: TestCommand
-    ) -> list[TestEvent] | list[ScheduleCronEvent] | Rejection:
+    ) -> list[TestEvent | ScheduleCronEvent] | Rejection:
         if cmd.value == 999:  # Sentinel: emit cron schedule
             return [
                 ScheduleCronEvent(
@@ -136,7 +136,9 @@ class ScheduleCronWorkflow(Workflow[
         return [TestEvent(value=cmd.value)]
 
     @staticmethod
-    def _evolve(state: TestState | None, event: TestEvent | ScheduleCronEvent) -> TestState:
+    def _evolve(
+        state: TestState | None, event: TestEvent | ScheduleCronEvent
+    ) -> TestState:
         if isinstance(event, ScheduleCronEvent):
             # _evolve_system handles EvDelay with cron; _evolve not called for that
             return state or TestState(

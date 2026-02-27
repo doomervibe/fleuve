@@ -39,6 +39,7 @@ def next_cron_fire(
         logger.error(f"Error computing cron next fire: {e}")
         return None
 
+
 C = TypeVar("C", bound=BaseModel)  # Command type
 Se = TypeVar("Se", bound=StoredEvent)  # StoredEvent subclass type
 Ds = TypeVar("Ds", bound=DelaySchedule)  # DelaySchedule subclass type

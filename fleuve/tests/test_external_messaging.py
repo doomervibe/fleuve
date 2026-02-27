@@ -241,8 +241,12 @@ class TestRepoExternalSubscriptions:
                 if state is None:
                     return [
                         TestEvent(value=1),
-                        EvExternalSubscriptionAdded(sub=ExternalSub(topic="order.created")),
-                        EvExternalSubscriptionAdded(sub=ExternalSub(topic="payment.done")),
+                        EvExternalSubscriptionAdded(
+                            sub=ExternalSub(topic="order.created")
+                        ),
+                        EvExternalSubscriptionAdded(
+                            sub=ExternalSub(topic="payment.done")
+                        ),
                     ]
                 return [Rejection()]
 

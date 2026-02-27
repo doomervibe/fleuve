@@ -301,9 +301,7 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
                     lifecycle="cancelled",
                     schedules=[],
                 )  # type: ignore[return-value]
-            return state.model_copy(
-                update={"lifecycle": "cancelled", "schedules": []}
-            )
+            return state.model_copy(update={"lifecycle": "cancelled", "schedules": []})
         elif isinstance(event, EvContinueAsNew):
             # State is preserved; the event log is reset in repo.continue_as_new.
             return state  # type: ignore[return-value]
@@ -322,7 +320,9 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
         if isinstance(event, EvSubscriptionRemoved):
             if state is None:
                 return None
-            new_subs = [s for s in state.subscriptions if not cls._sub_matches(s, event.sub)]
+            new_subs = [
+                s for s in state.subscriptions if not cls._sub_matches(s, event.sub)
+            ]
             return state.model_copy(update={"subscriptions": new_subs})
         if isinstance(event, EvExternalSubscriptionAdded):
             if state is None:
@@ -337,7 +337,9 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
         if isinstance(event, EvExternalSubscriptionRemoved):
             if state is None:
                 return None
-            new_ext = [x for x in state.external_subscriptions if x.topic != event.topic]
+            new_ext = [
+                x for x in state.external_subscriptions if x.topic != event.topic
+            ]
             return state.model_copy(update={"external_subscriptions": new_ext})
         if isinstance(event, EvScheduleAdded):
             if state is None:

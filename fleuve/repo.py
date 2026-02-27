@@ -1118,7 +1118,9 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             state = self.model.evolve_(base_state, event_bodies)
         else:
             state = base_state
-        assert state is not None  # guaranteed: early return when both rows and base_state empty
+        assert (
+            state is not None
+        )  # guaranteed: early return when both rows and base_state empty
         return StoredState(state=state, id=id, version=version)
 
     async def hydrate_state_(self, id: str) -> StoredState[S] | None:
