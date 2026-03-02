@@ -1,6 +1,7 @@
 """FastAPI application for Fleuve Framework UI."""
 
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,7 +16,7 @@ except ImportError:
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select, distinct, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -65,10 +66,26 @@ class FleuveUIBackend:
         self.delay_schedule_model = delay_schedule_model
         self.subscription_model = subscription_model
         self.frontend_dist_path = frontend_dist_path
+        self.ui_title = os.getenv("FLEUVE_UI_TITLE") or Path.cwd().name.replace(
+            "_", " "
+        ).title()
 
         self.app = FastAPI(title="Fleuve Framework UI", version="1.0.0")
         self._setup_routes()
         self._setup_static_files()
+
+    def _serve_index_html(self):
+        """Serve index.html with runtime placeholder replacement."""
+        if not self.frontend_dist_path:
+            return None
+        index_path = self.frontend_dist_path / "index.html"
+        if not index_path.exists():
+            return None
+
+        content = index_path.read_text(encoding="utf-8")
+        resolved_title = self.ui_title or "Fleuve"
+        content = content.replace("{{project_title}}", resolved_title)
+        return HTMLResponse(content=content)
 
     def _setup_static_files(self):
         """Set up static file serving for React app."""
@@ -104,7 +121,7 @@ class FleuveUIBackend:
                 self.frontend_dist_path
                 and (self.frontend_dist_path / "index.html").exists()
             ):
-                return FileResponse(str(self.frontend_dist_path / "index.html"))
+                return self._serve_index_html()
             return {
                 "status": "ok",
                 "message": "Fleuve Framework UI API",
@@ -834,7 +851,7 @@ class FleuveUIBackend:
                     return FileResponse(str(file_path))
 
                 # Otherwise serve index.html for client-side routing
-                return FileResponse(str(self.frontend_dist_path / "index.html"))
+                return self._serve_index_html()
 
             raise HTTPException(status_code=404, detail="Web app not built")
 

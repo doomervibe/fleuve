@@ -324,7 +324,7 @@ export function getMockDelays(workflowId) {
 export function getMockAllEvents(params = {}) {
   let events = [];
   
-  mockWorkflows.forEach((wf, idx) => {
+  mockWorkflows.forEach((wf) => {
     const workflowEvents = getMockEvents(wf.workflow_id);
     events.push(...workflowEvents);
   });

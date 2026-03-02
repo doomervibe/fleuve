@@ -229,7 +229,7 @@ export default function WorkflowList() {
     <div className="space-y-1">
       <div>
         <h2 className="text-sm font-mono text-theme">$ workflows</h2>
-        <p className="mt-0 text-xs font-mono text-theme opacity-70">> browse and search all workflows</p>
+        <p className="mt-0 text-xs font-mono text-theme opacity-70">{'>'} browse and search all workflows</p>
       </div>
 
       {/* Filters */}

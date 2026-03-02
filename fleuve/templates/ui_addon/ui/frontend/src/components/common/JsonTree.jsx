@@ -1,26 +1,29 @@
 import { useState, useCallback } from 'react';
 
-function ValueDisplay({ value, depth }) {
+function ValueDisplay({ value }) {
   if (value === null) {
-    return <span className="text-theme-error">null</span>;
+    return <span className="json-token-null">null</span>;
   }
   if (typeof value === 'boolean') {
-    return <span className="text-theme-warning">{String(value)}</span>;
+    return <span className="json-token-boolean">{String(value)}</span>;
   }
   if (typeof value === 'number') {
-    return <span className="text-theme-accent">{String(value)}</span>;
+    return <span className="json-token-number">{String(value)}</span>;
   }
   if (typeof value === 'string') {
+    const escaped = String(value).replace(/"/g, '\\"');
     return (
-      <span className="text-theme">
-        &quot;{String(value).replace(/"/g, '\\"')}&quot;
-      </span>
+      <>
+        <span className="json-token-punctuation">&quot;</span>
+        <span className="json-token-string">{escaped}</span>
+        <span className="json-token-punctuation">&quot;</span>
+      </>
     );
   }
   return null;
 }
 
-function TreeNode({ keyName, value, depth, defaultExpanded = false, expandAll }) {
+function TreeNode({ keyName, value, depth, defaultExpanded = false, expandAll, maxDepth }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const isExpanded = expandAll !== undefined ? expandAll : expanded;
   const isExpandable =
@@ -33,17 +36,34 @@ function TreeNode({ keyName, value, depth, defaultExpanded = false, expandAll })
       <div className="flex flex-wrap gap-x-1 font-mono text-xs" style={{ paddingLeft: `${depth * 12}px` }}>
         {keyName !== null && (
           <>
-            <span className="text-theme opacity-70">&quot;{keyName}&quot;</span>
-            <span className="text-theme opacity-70">:</span>
+            <span className="json-token-punctuation">&quot;</span>
+            <span className="json-token-key">{keyName}</span>
+            <span className="json-token-punctuation">&quot;:</span>
           </>
         )}
-        <ValueDisplay value={value} depth={depth} />
+        <ValueDisplay value={value} />
       </div>
     );
   }
 
   const isArray = Array.isArray(value);
   const entries = isArray ? value.map((v, i) => [String(i), v]) : Object.entries(value);
+  const reachedMaxDepth = depth >= maxDepth;
+
+  if (reachedMaxDepth) {
+    return (
+      <div className="flex flex-wrap gap-x-1 font-mono text-xs" style={{ paddingLeft: `${depth * 12}px` }}>
+        {keyName !== null && (
+          <>
+            <span className="json-token-punctuation">&quot;</span>
+            <span className="json-token-key">{keyName}</span>
+            <span className="json-token-punctuation">&quot;:</span>
+          </>
+        )}
+        <span className="json-token-punctuation">{isArray ? '[...]' : '{...}'}</span>
+      </div>
+    );
+  }
 
   return (
     <div className="font-mono text-xs">
@@ -54,19 +74,20 @@ function TreeNode({ keyName, value, depth, defaultExpanded = false, expandAll })
       >
         {keyName !== null && (
           <>
-            <span className="text-theme opacity-70">&quot;{keyName}&quot;</span>
-            <span className="text-theme opacity-70">:</span>
+            <span className="json-token-punctuation">&quot;</span>
+            <span className="json-token-key">{keyName}</span>
+            <span className="json-token-punctuation">&quot;:</span>
           </>
         )}
-        <span className="text-theme">
+        <span className="json-token-punctuation">
           {isArray ? '[' : '{'}
           {entries.length > 0 && (
             <span className="text-theme-accent ml-1">
-              {isExpanded ? '−' : '+'}
+              {isExpanded ? '-' : '+'}
             </span>
           )}
           {entries.length === 0 && (
-            <span className="text-theme">{isArray ? ']' : '}'}</span>
+            <span className="json-token-punctuation">{isArray ? ']' : '}'}</span>
           )}
         </span>
       </div>
@@ -79,10 +100,11 @@ function TreeNode({ keyName, value, depth, defaultExpanded = false, expandAll })
             depth={depth + 1}
             defaultExpanded={defaultExpanded}
             expandAll={expandAll}
+            maxDepth={maxDepth}
           />
         ))}
       {isExpanded && entries.length > 0 && (
-        <div style={{ paddingLeft: `${depth * 12}px` }} className="text-theme">
+        <div style={{ paddingLeft: `${depth * 12}px` }} className="json-token-punctuation">
           {isArray ? ']' : '}'}
         </div>
       )}
@@ -153,8 +175,9 @@ export default function JsonTree({
           keyName={null}
           value={parsed}
           depth={0}
-          defaultExpanded={false}
+          defaultExpanded={defaultExpanded}
           expandAll={expandAll ? true : undefined}
+          maxDepth={maxDepth}
         />
       </div>
     </div>

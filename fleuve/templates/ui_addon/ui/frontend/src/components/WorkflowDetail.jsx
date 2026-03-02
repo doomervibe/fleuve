@@ -8,6 +8,17 @@ import StateDiff from './common/StateDiff';
 import WorkflowTimeline from './common/WorkflowTimeline';
 import { format, formatDistanceToNow } from 'date-fns';
 
+function parseOptionalVersion(rawValue) {
+  if (rawValue === '' || rawValue == null) return null;
+  const parsed = Number.parseInt(rawValue, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function clampVersion(version, maxVersion) {
+  if (version == null) return null;
+  return Math.min(Math.max(version, 1), maxVersion);
+}
+
 function CopyButton({ text, className = '' }) {
   const [copied, setCopied] = useState(false);
 
@@ -51,7 +62,11 @@ export default function WorkflowDetail() {
   const [diffMode, setDiffMode] = useState(false);
   const [diffVersion1, setDiffVersion1] = useState(null);
   const [diffVersion2, setDiffVersion2] = useState(null);
+  const [selectedVersionInput, setSelectedVersionInput] = useState('');
+  const [diffVersion1Input, setDiffVersion1Input] = useState('');
+  const [diffVersion2Input, setDiffVersion2Input] = useState('');
   const [stateDiff, setStateDiff] = useState(null);
+  const [selectedEventIndex, setSelectedEventIndex] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -90,10 +105,23 @@ export default function WorkflowDetail() {
     return () => clearInterval(timer);
   }, []);
 
+  const versionNumbers = Array.from(new Set(events.map((e) => e.workflow_version)))
+    .filter((v) => Number.isFinite(v))
+    .sort((a, b) => a - b);
+  const maxWorkflowVersion = Math.max(workflow?.version || 0, ...versionNumbers, 1);
+  const latestWorkflowVersion = workflow?.version || maxWorkflowVersion;
+  const canShowDiff = diffVersion1 != null && diffVersion2 != null;
+
   const handleVersionSelect = async (version) => {
-    setSelectedVersion(version);
+    const normalized = version == null ? null : clampVersion(version, maxWorkflowVersion);
+    setSelectedVersion(normalized);
+    setSelectedVersionInput(normalized == null ? '' : String(normalized));
+    if (normalized == null) {
+      setStateAtVersion(null);
+      return;
+    }
     try {
-      const stateData = await api.getWorkflowStateAtVersion(workflowId, version);
+      const stateData = await api.getWorkflowStateAtVersion(workflowId, normalized);
       setStateAtVersion(stateData);
     } catch (err) {
       console.error('Failed to load state at version:', err);
@@ -102,7 +130,7 @@ export default function WorkflowDetail() {
   };
 
   const handleDiffFetch = async () => {
-    if (!diffVersion1 || !diffVersion2) return;
+    if (!canShowDiff) return;
     try {
       const data = await api.getWorkflowStateDiff(workflowId, diffVersion1, diffVersion2);
       setStateDiff(data);
@@ -110,6 +138,39 @@ export default function WorkflowDetail() {
       console.error('Failed to load state diff:', err);
       setStateDiff(null);
     }
+  };
+
+  const commitSelectedVersionInput = () => {
+    const parsed = parseOptionalVersion(selectedVersionInput);
+    if (parsed == null) {
+      handleVersionSelect(null);
+      return;
+    }
+    handleVersionSelect(parsed);
+  };
+
+  const commitDiffVersion1Input = () => {
+    const parsed = parseOptionalVersion(diffVersion1Input);
+    if (parsed == null) {
+      setDiffVersion1(null);
+      setDiffVersion1Input('');
+      return;
+    }
+    const normalized = clampVersion(parsed, maxWorkflowVersion);
+    setDiffVersion1(normalized);
+    setDiffVersion1Input(String(normalized));
+  };
+
+  const commitDiffVersion2Input = () => {
+    const parsed = parseOptionalVersion(diffVersion2Input);
+    if (parsed == null) {
+      setDiffVersion2(null);
+      setDiffVersion2Input('');
+      return;
+    }
+    const normalized = clampVersion(parsed, maxWorkflowVersion);
+    setDiffVersion2(normalized);
+    setDiffVersion2Input(String(normalized));
   };
 
   if (loading && !workflow) {
@@ -250,7 +311,7 @@ export default function WorkflowDetail() {
             <div className="space-y-1">
               <h3 className="text-xs font-mono text-theme mb-2">pending_activities_and_timers:</h3>
               {pendingCount === 0 ? (
-                <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">> no pending items</p>
+                <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">{'>'} no pending items</p>
               ) : (
                 <div className="space-y-2">
                   {pendingActivities.length > 0 && (
@@ -353,50 +414,124 @@ export default function WorkflowDetail() {
                   {!diffMode ? (
                     <>
                       <label className="text-xs font-mono text-theme opacity-70">view_state_at_version:</label>
-                      <select
-                        value={selectedVersion || ''}
-                        onChange={(e) => handleVersionSelect(parseInt(e.target.value) || null)}
-                        className="px-2 py-1 bg-theme border border-theme text-xs font-mono text-theme"
+                      <input
+                        type="number"
+                        min={1}
+                        max={maxWorkflowVersion}
+                        value={selectedVersionInput}
+                        onChange={(e) => setSelectedVersionInput(e.target.value)}
+                        onBlur={commitSelectedVersionInput}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            commitSelectedVersionInput();
+                          }
+                        }}
+                        placeholder="current"
+                        className="w-24 px-2 py-1 bg-theme border border-theme text-xs font-mono text-theme"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleVersionSelect(selectedVersion == null ? 1 : selectedVersion - 1)}
+                        disabled={(selectedVersion || 1) <= 1}
+                        className="px-2 py-1 bg-theme border border-theme text-theme text-xs font-mono hover:bg-[var(--fleuve-border-hover)] disabled:opacity-50"
                       >
-                        <option value="">current</option>
-                        {events.map((e) => (
-                          <option key={e.workflow_version} value={e.workflow_version}>
-                            version {e.workflow_version}
-                          </option>
-                        ))}
-                      </select>
+                        prev
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleVersionSelect(selectedVersion == null ? 1 : selectedVersion + 1)}
+                        disabled={(selectedVersion || 1) >= maxWorkflowVersion}
+                        className="px-2 py-1 bg-theme border border-theme text-theme text-xs font-mono hover:bg-[var(--fleuve-border-hover)] disabled:opacity-50"
+                      >
+                        next
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleVersionSelect(latestWorkflowVersion)}
+                        className="px-2 py-1 bg-theme border border-theme text-theme text-xs font-mono hover:bg-[var(--fleuve-border-hover)]"
+                      >
+                        latest
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleVersionSelect(null)}
+                        className="px-2 py-1 bg-theme border border-theme text-theme text-xs font-mono hover:bg-[var(--fleuve-border-hover)]"
+                      >
+                        current
+                      </button>
                     </>
                   ) : (
                     <>
-                      <select
-                        value={diffVersion1 || ''}
-                        onChange={(e) => setDiffVersion1(parseInt(e.target.value) || null)}
-                        className="px-2 py-1 bg-theme border border-theme text-xs font-mono text-theme"
-                      >
-                        <option value="">v1</option>
-                        {events.map((e) => (
-                          <option key={e.workflow_version} value={e.workflow_version}>
-                            v{e.workflow_version}
-                          </option>
-                        ))}
-                      </select>
+                      <input
+                        type="number"
+                        min={1}
+                        max={maxWorkflowVersion}
+                        value={diffVersion1Input}
+                        onChange={(e) => setDiffVersion1Input(e.target.value)}
+                        onBlur={commitDiffVersion1Input}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            commitDiffVersion1Input();
+                          }
+                        }}
+                        placeholder="v1"
+                        className="w-20 px-2 py-1 bg-theme border border-theme text-xs font-mono text-theme"
+                      />
                       <span className="text-theme opacity-70">→</span>
-                      <select
-                        value={diffVersion2 || ''}
-                        onChange={(e) => setDiffVersion2(parseInt(e.target.value) || null)}
-                        className="px-2 py-1 bg-theme border border-theme text-xs font-mono text-theme"
+                      <input
+                        type="number"
+                        min={1}
+                        max={maxWorkflowVersion}
+                        value={diffVersion2Input}
+                        onChange={(e) => setDiffVersion2Input(e.target.value)}
+                        onBlur={commitDiffVersion2Input}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            commitDiffVersion2Input();
+                          }
+                        }}
+                        placeholder="v2"
+                        className="w-20 px-2 py-1 bg-theme border border-theme text-xs font-mono text-theme"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDiffVersion1(diffVersion2);
+                          setDiffVersion1Input(diffVersion2 == null ? '' : String(diffVersion2));
+                          setDiffVersion2(diffVersion1);
+                          setDiffVersion2Input(diffVersion1 == null ? '' : String(diffVersion1));
+                        }}
+                        className="px-2 py-1 bg-theme border border-theme text-theme text-xs font-mono hover:bg-[var(--fleuve-border-hover)]"
                       >
-                        <option value="">v2</option>
-                        {events.map((e) => (
-                          <option key={e.workflow_version} value={e.workflow_version}>
-                            v{e.workflow_version}
-                          </option>
-                        ))}
-                      </select>
+                        swap
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDiffVersion1(latestWorkflowVersion);
+                          setDiffVersion1Input(String(latestWorkflowVersion));
+                        }}
+                        className="px-2 py-1 bg-theme border border-theme text-theme text-xs font-mono hover:bg-[var(--fleuve-border-hover)]"
+                      >
+                        v1←current
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDiffVersion2(latestWorkflowVersion);
+                          setDiffVersion2Input(String(latestWorkflowVersion));
+                        }}
+                        className="px-2 py-1 bg-theme border border-theme text-theme text-xs font-mono hover:bg-[var(--fleuve-border-hover)]"
+                      >
+                        v2←current
+                      </button>
                       <button
                         type="button"
                         onClick={handleDiffFetch}
-                        disabled={!diffVersion1 || !diffVersion2}
+                        disabled={!canShowDiff}
                         className="px-2 py-1 bg-theme border border-theme text-theme text-xs font-mono hover:bg-[var(--fleuve-border-hover)] disabled:opacity-50"
                       >
                         show_diff
@@ -414,7 +549,7 @@ export default function WorkflowDetail() {
                     label2={`v${stateDiff.version2}`}
                   />
                 </div>
-              ) : diffMode && (diffVersion1 || diffVersion2) && !stateDiff ? (
+              ) : diffMode && (diffVersion1 != null || diffVersion2 != null) && !stateDiff ? (
                 <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">
                   select both versions and click show_diff
                 </p>
@@ -425,16 +560,20 @@ export default function WorkflowDetail() {
                     activities={activities}
                     delays={delays}
                     onEventClick={(event, index) => {
+                      setSelectedEventIndex(index);
                       const el = eventRefs.current[index];
                       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }}
+                    selectedEventIndex={selectedEventIndex}
                     eventRefs={eventRefs}
                   />
                   {events.map((event, idx) => (
                     <div
                       key={idx}
                       ref={(el) => { eventRefs.current[idx] = el; }}
-                      className="border-l-2 border-theme pl-2 py-1 bg-theme"
+                      className={`border-l-2 pl-2 py-1 bg-theme ${
+                        idx === selectedEventIndex ? 'border-theme-accent' : 'border-theme'
+                      }`}
                     >
                       <div className="flex items-center justify-between">
                         <div>
@@ -446,17 +585,17 @@ export default function WorkflowDetail() {
                         </div>
                         <span className="text-xs font-mono text-theme opacity-50">#{event.global_id}</span>
                       </div>
-                      <details className="mt-0">
+                      <details className="mt-0" open={idx === selectedEventIndex}>
                         <summary className="text-xs font-mono text-theme-accent cursor-pointer">
                           view_event_body
                         </summary>
-                        <JsonTree data={event.body} className="mt-1" />
+                        <JsonTree data={event.body} defaultExpanded={true} className="mt-1" />
                       </details>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">> no events found</p>
+                <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">{'>'} no events found</p>
               )}
             </div>
           )}
@@ -465,78 +604,85 @@ export default function WorkflowDetail() {
             <div className="space-y-1">
               <h3 className="text-xs font-mono text-theme">activities:</h3>
               {activities.length > 0 ? (
-                <div className="overflow-x-auto border border-theme">
-                  <table className="min-w-full divide-y divide-[color:var(--fleuve-border)] font-mono text-xs">
-                    <thead className="bg-theme">
-                      <tr>
-                        <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
-                          event_#
-                        </th>
-                        <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
-                          status
-                        </th>
-                        <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
-                          retries
-                        </th>
-                        <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
-                          started
-                        </th>
-                        <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
-                          finished
-                        </th>
-                        <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
-                          error
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-theme divide-y divide-[color:var(--fleuve-border)]">
-                      {activities.map((activity, idx) => (
-                        <tr key={idx}>
-                          <td className="px-2 py-1 whitespace-nowrap text-xs text-theme">
-                            {activity.event_number}
-                          </td>
-                          <td className="px-2 py-1 whitespace-nowrap">
-                            <span
-                              className={`px-1 py-0 text-xs font-mono border ${
-                                activity.status === 'completed'
-                                  ? 'bg-theme text-theme border-theme'
-                                  : activity.status === 'failed'
-                                  ? 'bg-theme text-theme-error border-theme-error'
-                                  : activity.status === 'running'
-                                  ? 'bg-theme text-theme-accent border-theme-accent'
-                                  : 'bg-theme text-theme-warning border-theme-warning'
-                              }`}
-                            >
-                              {activity.status}
-                            </span>
-                          </td>
-                          <td className="px-2 py-1 whitespace-nowrap text-xs text-theme">
-                            {activity.retry_count} / {activity.max_retries}
-                          </td>
-                          <td className="px-2 py-1 whitespace-nowrap text-xs text-theme opacity-70">
-                            {format(new Date(activity.started_at), 'MMM d, HH:mm:ss')}
-                          </td>
-                          <td className="px-2 py-1 whitespace-nowrap text-xs text-theme opacity-70">
-                            {activity.finished_at
-                              ? format(new Date(activity.finished_at), 'MMM d, HH:mm:ss')
-                              : '-'}
-                          </td>
-                          <td className="px-2 py-1 text-xs text-theme-error">
-                            {activity.error_message ? (
-                              <span title={activity.error_type}>
-                                {activity.error_message.substring(0, 50)}...
-                              </span>
-                            ) : (
-                              '-'
-                            )}
-                          </td>
+                <div className="space-y-1">
+                  <WorkflowTimeline
+                    events={[]}
+                    activities={activities}
+                    delays={[]}
+                  />
+                  <div className="overflow-x-auto border border-theme">
+                    <table className="min-w-full divide-y divide-[color:var(--fleuve-border)] font-mono text-xs">
+                      <thead className="bg-theme">
+                        <tr>
+                          <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
+                            event_#
+                          </th>
+                          <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
+                            status
+                          </th>
+                          <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
+                            retries
+                          </th>
+                          <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
+                            started
+                          </th>
+                          <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
+                            finished
+                          </th>
+                          <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
+                            error
+                          </th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="bg-theme divide-y divide-[color:var(--fleuve-border)]">
+                        {activities.map((activity, idx) => (
+                          <tr key={idx}>
+                            <td className="px-2 py-1 whitespace-nowrap text-xs text-theme">
+                              {activity.event_number}
+                            </td>
+                            <td className="px-2 py-1 whitespace-nowrap">
+                              <span
+                                className={`px-1 py-0 text-xs font-mono border ${
+                                  activity.status === 'completed'
+                                    ? 'bg-theme text-theme border-theme'
+                                    : activity.status === 'failed'
+                                    ? 'bg-theme text-theme-error border-theme-error'
+                                    : activity.status === 'running'
+                                    ? 'bg-theme text-theme-accent border-theme-accent'
+                                    : 'bg-theme text-theme-warning border-theme-warning'
+                                }`}
+                              >
+                                {activity.status}
+                              </span>
+                            </td>
+                            <td className="px-2 py-1 whitespace-nowrap text-xs text-theme">
+                              {activity.retry_count} / {activity.max_retries}
+                            </td>
+                            <td className="px-2 py-1 whitespace-nowrap text-xs text-theme opacity-70">
+                              {format(new Date(activity.started_at), 'MMM d, HH:mm:ss')}
+                            </td>
+                            <td className="px-2 py-1 whitespace-nowrap text-xs text-theme opacity-70">
+                              {activity.finished_at
+                                ? format(new Date(activity.finished_at), 'MMM d, HH:mm:ss')
+                                : '-'}
+                            </td>
+                            <td className="px-2 py-1 text-xs text-theme-error">
+                              {activity.error_message ? (
+                                <span title={activity.error_type}>
+                                  {activity.error_message.substring(0, 50)}...
+                                </span>
+                              ) : (
+                                '-'
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               ) : (
-                <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">> no activities found</p>
+                <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">{'>'} no activities found</p>
               )}
             </div>
           )}
@@ -572,7 +718,7 @@ export default function WorkflowDetail() {
                                 cron: {delay.cron_expression}
                                 {delay.next_fire_times?.length > 0 && (
                                   <span className="opacity-70 ml-1">
-                                    next: {delay.next_fire_times.slice(0, 3).map((t, i) => format(new Date(t), 'MMM d HH:mm')).join(', ')}
+                                    next: {delay.next_fire_times.slice(0, 3).map((t) => format(new Date(t), 'MMM d HH:mm')).join(', ')}
                                   </span>
                                 )}
                               </p>
@@ -595,7 +741,7 @@ export default function WorkflowDetail() {
                   })}
                 </div>
               ) : (
-                <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">> no delays found</p>
+                <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">{'>'} no delays found</p>
               )}
             </div>
           )}

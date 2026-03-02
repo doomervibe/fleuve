@@ -154,7 +154,7 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-1">
           <div>
             <h2 className="text-sm font-mono text-theme mb-0">$ dashboard</h2>
-            <p className="text-xs font-mono text-theme opacity-70">> overview of your fleuve workflows and system metrics</p>
+            <p className="text-xs font-mono text-theme opacity-70">{'>'} overview of your fleuve workflows and system metrics</p>
           </div>
           <div className="flex items-center space-x-2">
             <label className="text-xs font-mono text-theme">workflow_type:</label>
@@ -299,7 +299,7 @@ export default function Dashboard() {
               </div>
             </div>
           ) : (
-            <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">> no data available</p>
+            <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">{'>'} no data available</p>
           )}
         </div>
 
@@ -374,7 +374,7 @@ export default function Dashboard() {
               </div>
             </div>
           ) : (
-            <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">> no data available</p>
+            <p className="text-theme opacity-50 text-center py-4 font-mono text-xs">{'>'} no data available</p>
           )}
         </div>
       </div>
@@ -390,7 +390,7 @@ export default function Dashboard() {
             to="/workflows"
             className="text-xs font-mono text-theme hover:text-theme-accent border border-theme px-1 py-0"
           >
-            view_all ->
+            view_all {'->'}
           </Link>
         </div>
         {workflows.length > 0 ? (
@@ -449,7 +449,7 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="text-center py-4">
-            <p className="text-theme opacity-50 font-mono text-xs">> no workflows found</p>
+            <p className="text-theme opacity-50 font-mono text-xs">{'>'} no workflows found</p>
           </div>
         )}
       </div>
