@@ -780,11 +780,89 @@ def admin_truncate(ctx, workflow_type, table, snapshot_table, retention_days, dr
     show_default=True,
     help="Port for the UI server",
 )
-def ui(host, port):
-    """Start the Fleuve web UI server."""
+@click.option(
+    "--models-module",
+    default=None,
+    metavar="MODULE",
+    help=(
+        "Dotted Python import path of a module containing your custom Fleuve ORM "
+        "model classes (e.g. myproject.db.db_fleuve).  Use together with the "
+        "--event-model / --activity-model / --delay-schedule-model / "
+        "--subscription-model options to tell the UI which classes to use instead "
+        "of the built-in defaults.  Useful when the host database already has an "
+        "unrelated 'events' table or when you use non-standard table names."
+    ),
+)
+@click.option(
+    "--event-model",
+    default=None,
+    metavar="CLASS",
+    help="StoredEvent subclass name inside --models-module (e.g. DomainEventModel).",
+)
+@click.option(
+    "--activity-model",
+    default=None,
+    metavar="CLASS",
+    help="Activity subclass name inside --models-module (e.g. DomainActivityModel).",
+)
+@click.option(
+    "--delay-schedule-model",
+    default=None,
+    metavar="CLASS",
+    help="DelaySchedule subclass name inside --models-module.",
+)
+@click.option(
+    "--subscription-model",
+    default=None,
+    metavar="CLASS",
+    help="Subscription subclass name inside --models-module.",
+)
+def ui(
+    host,
+    port,
+    models_module,
+    event_model,
+    activity_model,
+    delay_schedule_model,
+    subscription_model,
+):
+    """Start the Fleuve web UI server.
+
+    \b
+    Custom models example
+    ---------------------
+    If your project already has an unrelated 'events' table, or uses custom
+    Fleuve table names, point the UI at your own ORM classes:
+
+    \b
+        fleuve ui \\
+          --models-module myproject.db.db_fleuve \\
+          --event-model DomainEventModel \\
+          --activity-model DomainActivityModel \\
+          --delay-schedule-model DomainDelaySchedule \\
+          --subscription-model DomainSubscription
+
+    \b
+    Env-var table name overrides (default models only)
+    ---------------------------------------------------
+    Alternatively, override just the table names used by the default models:
+
+    \b
+        FLEUVE_EVENTS_TABLE=domain_events \\
+        FLEUVE_ACTIVITIES_TABLE=domain_activities \\
+        fleuve ui
+    """
     from fleuve.ui.server import run_server
 
-    run_server(host=host, port=port)
+    run_server(
+        host=host,
+        port=port,
+        models_module=models_module,
+        event_model_name=event_model,
+        activity_model_name=activity_model,
+        delay_schedule_model_name=delay_schedule_model,
+        subscription_model_name=subscription_model,
+    )
 
 
 @cli.command("validate")
