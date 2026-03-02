@@ -14,6 +14,7 @@ include .coveragerc
 
 # Include all Python source files
 recursive-include fleuve *.py
+recursive-include fleuve/ui/frontend_dist *
 
 # Include type checking marker
 include fleuve/py.typed

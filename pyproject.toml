@@ -57,6 +57,11 @@ fleuve = "fleuve.cli:main"
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.poetry]
+include = [
+    { path = "fleuve/ui/frontend_dist/**/*", format = ["sdist", "wheel"] },
+]
+
 [project.optional-dependencies]
 otel = ["opentelemetry-api>=1.20.0"]
 
