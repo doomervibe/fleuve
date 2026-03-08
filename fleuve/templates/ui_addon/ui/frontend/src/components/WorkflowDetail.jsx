@@ -5,6 +5,7 @@ import Loading from './common/Loading';
 import Error from './common/Error';
 import JsonTree from './common/JsonTree';
 import StateDiff from './common/StateDiff';
+import TypeBadge from './common/TypeBadge';
 import WorkflowTimeline from './common/WorkflowTimeline';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -220,7 +221,9 @@ export default function WorkflowDetail() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
           <div>
             <p className="text-xs font-mono text-theme opacity-70">workflow_type:</p>
-            <p className="mt-0 text-xs font-mono text-theme">{workflow.workflow_type}</p>
+            <div className="mt-0">
+              <TypeBadge value={workflow.workflow_type} kind="workflow" />
+            </div>
           </div>
           <div>
             <p className="text-xs font-mono text-theme opacity-70">version:</p>
@@ -297,7 +300,8 @@ export default function WorkflowDetail() {
                           <span className="opacity-70">workflow:</span> {sub.workflow_id}
                         </p>
                         <p className="text-xs font-mono text-theme">
-                          <span className="opacity-70">event_type:</span> {sub.event_type}
+                          <span className="opacity-70 mr-1">event_type:</span>
+                          <TypeBadge value={sub.event_type} kind="event" />
                         </p>
                       </div>
                     ))}
@@ -334,6 +338,9 @@ export default function WorkflowDetail() {
                               </span>
                             </div>
                             <p className="text-xs font-mono text-theme opacity-70 mt-0">
+                              action: {activity.action_type || 'unknown'}
+                            </p>
+                            <p className="text-xs font-mono text-theme opacity-70 mt-0">
                               retries: {activity.retry_count} / {activity.max_retries}
                               {activity.started_at && (
                                 <> · waiting {formatDistanceToNow(new Date(activity.started_at), { addSuffix: false })}</>
@@ -364,13 +371,16 @@ export default function WorkflowDetail() {
                           const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
                           return (
                             <div
-                              key={idx}
+                              key={delay.delay_id || `${delay.workflow_id}-${delay.event_version}-${idx}`}
                               className="border-l-2 border-theme-warning pl-2 py-1 bg-theme"
                             >
                               <div className="flex items-center justify-between">
                                 <div>
                                   <p className="font-mono text-xs text-theme">
                                     until {format(delayUntil, 'MMM d, HH:mm:ss')}
+                                  </p>
+                                  <p className="text-xs font-mono text-theme opacity-70">
+                                    kind: {delay.delay_type || delay.next_command_type || 'delay'}
                                   </p>
                                   <p className="text-xs font-mono text-theme opacity-70">
                                     event_version: {delay.event_version}
@@ -577,7 +587,7 @@ export default function WorkflowDetail() {
                     >
                       <div className="flex items-center justify-between">
                         <div>
-                          <p className="font-mono text-xs text-theme">{event.event_type}</p>
+                          <TypeBadge value={event.event_type} kind="event" />
                           <p className="text-xs font-mono text-theme opacity-70">
                             version {event.workflow_version} |{' '}
                             {format(new Date(event.at), 'MMM d, yyyy HH:mm:ss')}
@@ -618,6 +628,9 @@ export default function WorkflowDetail() {
                             event_#
                           </th>
                           <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
+                            action
+                          </th>
+                          <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
                             status
                           </th>
                           <th className="px-2 py-1 text-left text-xs font-mono text-theme border-b border-theme">
@@ -639,6 +652,9 @@ export default function WorkflowDetail() {
                           <tr key={idx}>
                             <td className="px-2 py-1 whitespace-nowrap text-xs text-theme">
                               {activity.event_number}
+                            </td>
+                            <td className="px-2 py-1 whitespace-nowrap text-xs text-theme">
+                              {activity.action_type || 'unknown'}
                             </td>
                             <td className="px-2 py-1 whitespace-nowrap">
                               <span
@@ -697,7 +713,7 @@ export default function WorkflowDetail() {
                     const isActive = delayUntil > now;
                     return (
                       <div
-                        key={idx}
+                        key={delay.delay_id || `${delay.workflow_id}-${delay.event_version}-${idx}`}
                         className={`border-l-2 ${
                           isActive ? 'border-theme-warning' : 'border-theme'
                         } pl-2 py-1 bg-theme`}
@@ -709,6 +725,9 @@ export default function WorkflowDetail() {
                             </p>
                             <p className="text-xs font-mono text-theme opacity-70">
                               until: {format(delayUntil, 'MMM d, yyyy HH:mm:ss')}
+                            </p>
+                            <p className="text-xs font-mono text-theme opacity-70">
+                              kind: {delay.delay_type || delay.next_command_type || 'delay'}
                             </p>
                             <p className="text-xs font-mono text-theme opacity-70">
                               event_version: {delay.event_version}

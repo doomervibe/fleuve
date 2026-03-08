@@ -4,6 +4,7 @@ import { api } from '../api';
 import Loading from './common/Loading';
 import Error from './common/Error';
 import Table from './common/Table';
+import TypeBadge from './common/TypeBadge';
 import { format, formatDistanceToNow } from 'date-fns';
 
 function CronScheduleInfo({ delay }) {
@@ -139,7 +140,14 @@ export default function DelayViewer() {
       key: 'workflow_type',
       label: 'workflow type',
       render: (row) => (
-        <span className="text-xs font-mono text-theme font-mono text-xs">{row.workflow_type}</span>
+        <TypeBadge value={row.workflow_type} kind="workflow" />
+      ),
+    },
+    {
+      key: 'delay_type',
+      label: 'delay/action kind',
+      render: (row) => (
+        <span className="text-xs font-mono text-theme">{row.delay_type || row.next_command_type || 'delay'}</span>
       ),
     },
     {
@@ -345,6 +353,9 @@ export default function DelayViewer() {
                       </Link>
                       <p className="text-xs font-mono text-theme font-mono text-xs mt-0.5">
                         {format(new Date(delay.delay_until), 'MMM d, yyyy HH:mm:ss')}
+                      </p>
+                      <p className="text-xs font-mono text-theme opacity-70 mt-0.5">
+                        kind: {delay.delay_type || delay.next_command_type || 'delay'}
                       </p>
                       <CronScheduleInfo delay={delay} />
                     </div>

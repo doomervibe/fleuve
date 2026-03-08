@@ -58,6 +58,8 @@ class ActivityResponse(BaseModel):
     error_message: Optional[str] = None
     error_type: Optional[str] = None
     checkpoint: Dict[str, Any] = {}
+    action_type: str = ""
+    runner_id: Optional[str] = None
 
 
 class DelayResponse(BaseModel):
@@ -65,10 +67,13 @@ class DelayResponse(BaseModel):
 
     workflow_id: str
     workflow_type: str
+    delay_id: str = ""
     delay_until: datetime
     event_version: int
     created_at: datetime
     next_command: Dict[str, Any]
+    delay_type: str = ""
+    next_command_type: str = ""
     cron_expression: Optional[str] = None
     cron_timezone: Optional[str] = None
     next_fire_times: Optional[List[datetime]] = (

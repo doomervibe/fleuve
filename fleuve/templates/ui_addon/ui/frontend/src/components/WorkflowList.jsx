@@ -4,6 +4,7 @@ import { api } from '../api';
 import Loading from './common/Loading';
 import Error from './common/Error';
 import Table from './common/Table';
+import TypeBadge from './common/TypeBadge';
 import { format } from 'date-fns';
 
 function CopyButton({ text, className = '' }) {
@@ -173,7 +174,7 @@ export default function WorkflowList() {
       key: 'workflow_type',
       label: 'type',
       render: (row) => (
-        <span className="text-xs font-mono text-theme">{row.workflow_type}</span>
+        <TypeBadge value={row.workflow_type} kind="workflow" />
       ),
     },
     {

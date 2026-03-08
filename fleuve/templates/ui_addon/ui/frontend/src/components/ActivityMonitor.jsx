@@ -114,6 +114,13 @@ export default function ActivityMonitor() {
       ),
     },
     {
+      key: 'action_type',
+      label: 'action',
+      render: (row) => (
+        <span className="text-xs font-mono text-theme">{row.action_type || 'unknown'}</span>
+      ),
+    },
+    {
       key: 'status',
       label: 'status',
       render: (row) => (
@@ -294,6 +301,10 @@ export default function ActivityMonitor() {
                   <p className="text-xs font-mono text-theme font-mono text-xs">{selectedActivity.event_number}</p>
                 </div>
                 <div>
+                  <p className="text-xs font-mono font-medium text-theme font-mono text-xs opacity-70">action</p>
+                  <p className="text-xs font-mono text-theme font-mono text-xs">{selectedActivity.action_type || 'unknown'}</p>
+                </div>
+                <div>
                   <p className="text-xs font-mono font-medium text-theme font-mono text-xs opacity-70">status</p>
                   <span
                     className={`inline-block px-2 py-1 text-xs rounded ${getStatusColor(
@@ -327,6 +338,12 @@ export default function ActivityMonitor() {
                   <p className="text-xs font-mono font-medium text-theme font-mono text-xs opacity-70">duration</p>
                   <p className="text-xs font-mono text-theme font-mono text-xs">
                     {calculateDuration(selectedActivity.started_at, selectedActivity.finished_at)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-mono font-medium text-theme font-mono text-xs opacity-70">runner</p>
+                  <p className="text-xs font-mono text-theme font-mono text-xs">
+                    {selectedActivity.runner_id || '-'}
                   </p>
                 </div>
               </div>

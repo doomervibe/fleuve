@@ -35,10 +35,11 @@ export default function WorkflowTimeline({
     (activities || []).forEach((activity) => {
       const start = new Date(activity.started_at || activity.created_at || now).getTime();
       const end = activity.finished_at ? new Date(activity.finished_at).getTime() : now;
+      const actionType = activity.action_type || `activity #${activity.event_number}`;
       all.push({
         type: 'activity',
         id: `activity-${activity.workflow_id}-${activity.event_number}`,
-        label: `activity #${activity.event_number}`,
+        label: actionType,
         eventNumber: activity.event_number,
         status: activity.status,
         start,
@@ -49,10 +50,11 @@ export default function WorkflowTimeline({
     (delays || []).forEach((delay) => {
       const start = new Date(delay.created_at || delay.delay_until).getTime();
       const end = new Date(delay.delay_until).getTime();
+      const delayType = delay.delay_type || delay.next_command_type || 'delay';
       all.push({
         type: 'delay',
-        id: `delay-${delay.workflow_id}-${delay.event_version}`,
-        label: `until ${format(end, 'HH:mm:ss')}`,
+        id: `delay-${delay.delay_id || `${delay.workflow_id}-${delay.event_version}-${delay.delay_until}`}`,
+        label: `${delayType} until ${format(end, 'HH:mm:ss')}`,
         eventNumber: delay.event_version,
         status: end > now ? 'pending' : 'completed',
         start,

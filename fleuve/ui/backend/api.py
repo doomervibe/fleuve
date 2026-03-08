@@ -109,6 +109,33 @@ class FleuveUIBackend:
     def _setup_routes(self):
         """Set up API routes."""
 
+        def _to_plain_dict(value: Any) -> Dict[str, Any]:
+            if hasattr(value, "model_dump"):
+                dumped = value.model_dump()
+                return dumped if isinstance(dumped, dict) else {}
+            if isinstance(value, dict):
+                return value
+            return {}
+
+        def _derive_action_type(
+            checkpoint: Dict[str, Any],
+            event_type: Optional[str],
+            event_body: Dict[str, Any],
+        ) -> str:
+            candidates = (
+                checkpoint.get("action_type"),
+                checkpoint.get("action"),
+                checkpoint.get("step"),
+                checkpoint.get("operation"),
+                event_body.get("action_type"),
+                event_body.get("type"),
+                event_type,
+            )
+            for candidate in candidates:
+                if isinstance(candidate, str) and candidate.strip():
+                    return candidate.strip()
+            return "unknown"
+
         @self.app.get("/health")
         async def health():
             """Health check endpoint."""
@@ -588,15 +615,42 @@ class FleuveUIBackend:
                     .offset(offset)
                 )
 
-                activities = []
-                for activity in result.scalars().all():
-                    checkpoint = {}
-                    if hasattr(activity, "checkpoint") and activity.checkpoint:
-                        checkpoint = (
-                            activity.checkpoint
-                            if isinstance(activity.checkpoint, dict)
-                            else {}
+                activity_rows = result.scalars().all()
+                event_map: Dict[tuple[str, int], tuple[Optional[str], Dict[str, Any]]] = {}
+                workflow_ids = {a.workflow_id for a in activity_rows}
+                event_numbers = {
+                    a.event_number
+                    for a in activity_rows
+                    if getattr(a, "event_number", None) is not None
+                }
+                if workflow_ids and event_numbers:
+                    event_result = await s.execute(
+                        select(
+                            self.event_model.workflow_id,
+                            self.event_model.workflow_version,
+                            self.event_model.event_type,
+                            self.event_model.body,
+                        ).where(
+                            and_(
+                                self.event_model.workflow_id.in_(workflow_ids),
+                                self.event_model.workflow_version.in_(event_numbers),
+                            )
                         )
+                    )
+                    for workflow_id_val, version, ev_type, ev_body in event_result.fetchall():
+                        event_map[(workflow_id_val, version)] = (
+                            ev_type,
+                            _to_plain_dict(ev_body),
+                        )
+
+                activities = []
+                for activity in activity_rows:
+                    checkpoint = _to_plain_dict(getattr(activity, "checkpoint", {}))
+                    event_type, event_body = event_map.get(
+                        (activity.workflow_id, activity.event_number),
+                        (None, {}),
+                    )
+                    action_type = _derive_action_type(checkpoint, event_type, event_body)
 
                     activities.append(
                         ActivityResponse(
@@ -612,6 +666,8 @@ class FleuveUIBackend:
                             error_message=activity.error_message,
                             error_type=activity.error_type,
                             checkpoint=checkpoint,
+                            action_type=action_type,
+                            runner_id=getattr(activity, "runner_id", None),
                         )
                     )
 
@@ -662,8 +718,17 @@ class FleuveUIBackend:
                         elif isinstance(delay.next_command, dict):
                             next_command = delay.next_command
 
+                    next_command_type = ""
+                    next_type_raw = next_command.get("type")
+                    if isinstance(next_type_raw, str) and next_type_raw.strip():
+                        next_command_type = next_type_raw.strip()
+
                     cron_expr = getattr(delay, "cron_expression", None)
                     tz_name = getattr(delay, "timezone", None)
+                    delay_type = next_command_type or ("cron" if cron_expr else "delay")
+                    delay_id = getattr(delay, "delay_id", None) or (
+                        f"{delay.workflow_id}:{delay.event_version}:{int(delay.delay_until.timestamp())}"
+                    )
                     next_fire_times = None
                     if _CRON_AVAILABLE and cron_expr:
                         try:
@@ -683,10 +748,13 @@ class FleuveUIBackend:
                         DelayResponse(
                             workflow_id=delay.workflow_id,
                             workflow_type=delay.workflow_type,
+                            delay_id=str(delay_id),
                             delay_until=delay.delay_until,
                             event_version=delay.event_version,
                             created_at=delay.created_at,
                             next_command=next_command,
+                            delay_type=delay_type,
+                            next_command_type=next_command_type,
                             cron_expression=cron_expr,
                             cron_timezone=tz_name,
                             next_fire_times=next_fire_times,

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 
 function ValueDisplay({ value }) {
   if (value === null) {
@@ -118,9 +118,29 @@ export default function JsonTree({
   maxDepth = 10,
   className = '',
   showCopy = true,
+  previewLineLimit = 10,
 }) {
   const [copied, setCopied] = useState(false);
   const [expandAll, setExpandAll] = useState(false);
+
+  const rawJson = useMemo(() => {
+    if (typeof data === 'string') {
+      return data;
+    }
+    try {
+      return JSON.stringify(data, null, 2);
+    } catch {
+      return String(data);
+    }
+  }, [data]);
+  const rawJsonLines = useMemo(() => rawJson.split('\n'), [rawJson]);
+  const exceedsPreviewLimit = rawJsonLines.length > previewLineLimit;
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded || !exceedsPreviewLimit);
+
+  useEffect(() => {
+    setIsExpanded(defaultExpanded || !exceedsPreviewLimit);
+    setExpandAll(false);
+  }, [defaultExpanded, exceedsPreviewLimit, rawJson]);
 
   const handleCopy = useCallback(async () => {
     try {
@@ -148,11 +168,21 @@ export default function JsonTree({
     <div className={`bg-theme p-2 border border-theme overflow-x-auto ${className}`}>
       <div className="flex items-center justify-between gap-2 mb-1 pb-1 border-b border-theme">
         <div className="flex gap-1">
+          {exceedsPreviewLimit && (
+            <button
+              type="button"
+              onClick={() => setIsExpanded((expanded) => !expanded)}
+              className="px-1 py-0 text-xs font-mono text-theme border border-theme hover:bg-[var(--fleuve-border-hover)]"
+            >
+              {isExpanded ? 'preview' : 'expand'}
+            </button>
+          )}
           {typeof parsed === 'object' && parsed !== null && (
             <>
               <button
                 type="button"
                 onClick={() => setExpandAll((e) => !e)}
+                disabled={!isExpanded}
                 className="px-1 py-0 text-xs font-mono text-theme border border-theme hover:bg-[var(--fleuve-border-hover)]"
               >
                 {expandAll ? 'collapse' : 'expand'}
@@ -170,16 +200,26 @@ export default function JsonTree({
           )}
         </div>
       </div>
-      <div className="font-mono text-xs">
-        <TreeNode
-          keyName={null}
-          value={parsed}
-          depth={0}
-          defaultExpanded={defaultExpanded}
-          expandAll={expandAll ? true : undefined}
-          maxDepth={maxDepth}
-        />
-      </div>
+      {!isExpanded && exceedsPreviewLimit ? (
+        <pre
+          className="font-mono text-xs text-theme cursor-pointer"
+          onClick={() => setIsExpanded(true)}
+          title="Click to expand"
+        >
+          {rawJsonLines.slice(0, previewLineLimit).join('\n')}
+        </pre>
+      ) : (
+        <div className="font-mono text-xs">
+          <TreeNode
+            keyName={null}
+            value={parsed}
+            depth={0}
+            defaultExpanded={true}
+            expandAll={expandAll ? true : undefined}
+            maxDepth={maxDepth}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import Loading from './common/Loading';
 import Error from './common/Error';
 import Table from './common/Table';
 import JsonTree from './common/JsonTree';
+import TypeBadge from './common/TypeBadge';
 import { format } from 'date-fns';
 
 export default function EventExplorer() {
@@ -134,14 +135,14 @@ export default function EventExplorer() {
       key: 'workflow_type',
       label: 'workflow_type',
       render: (row) => (
-        <span className="text-xs text-theme font-mono">{row.workflow_type}</span>
+        <TypeBadge value={row.workflow_type} kind="workflow" />
       ),
     },
     {
       key: 'event_type',
       label: 'event_type',
       render: (row) => (
-        <span className="text-xs font-mono text-theme">{row.event_type}</span>
+        <TypeBadge value={row.event_type} kind="event" />
       ),
     },
     {
@@ -326,7 +327,7 @@ export default function EventExplorer() {
               </div>
               <div>
                 <p className="text-xs font-mono text-theme opacity-70">event_type:</p>
-                <p className="text-xs font-mono text-theme">{selectedEvent.event_type}</p>
+                <TypeBadge value={selectedEvent.event_type} kind="event" />
               </div>
               <div>
                 <p className="text-xs font-mono text-theme opacity-70">workflow_version:</p>

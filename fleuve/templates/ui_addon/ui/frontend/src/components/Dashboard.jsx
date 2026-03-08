@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../api';
 import Loading from './common/Loading';
 import Error from './common/Error';
+import TypeBadge from './common/TypeBadge';
 import { PieChart, Pie, Cell, Tooltip } from 'recharts';
 
 const COLORS = ['#00ff00', '#00ffff', '#ffbf00', '#ffff00', '#00ff88', '#88ff00', '#ff00ff', '#ff8800'];
@@ -430,9 +431,7 @@ export default function Dashboard() {
                       </div>
                     </td>
                     <td className="px-2 py-1 whitespace-nowrap">
-                      <span className="inline-flex items-center px-1 py-0 text-xs font-mono bg-theme text-theme border border-theme">
-                        {workflow.workflow_type}
-                      </span>
+                      <TypeBadge value={workflow.workflow_type} kind="workflow" />
                     </td>
                     <td className="px-2 py-1 whitespace-nowrap text-xs font-mono text-theme">
                       {workflow.version}

@@ -27,6 +27,41 @@ function delay(ms = 300) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function normalizeActivity(activity = {}) {
+  const checkpoint = activity.checkpoint && typeof activity.checkpoint === 'object'
+    ? activity.checkpoint
+    : {};
+  const fallbackActionType =
+    checkpoint.action_type ||
+    checkpoint.action ||
+    checkpoint.step ||
+    checkpoint.operation ||
+    'unknown';
+
+  return {
+    ...activity,
+    checkpoint,
+    action_type: activity.action_type || fallbackActionType,
+    runner_id: activity.runner_id || null,
+  };
+}
+
+function normalizeDelay(delayRow = {}) {
+  const nextCommand = delayRow.next_command && typeof delayRow.next_command === 'object'
+    ? delayRow.next_command
+    : {};
+  const nextCommandType = delayRow.next_command_type || nextCommand.type || '';
+  const fallbackDelayType = nextCommandType || (delayRow.cron_expression ? 'cron' : 'delay');
+
+  return {
+    ...delayRow,
+    next_command: nextCommand,
+    next_command_type: nextCommandType,
+    delay_type: delayRow.delay_type || fallbackDelayType,
+    delay_id: delayRow.delay_id || `${delayRow.workflow_id || 'wf'}:${delayRow.event_version || 'ev'}:${delayRow.delay_until || 'delay'}`,
+  };
+}
+
 async function fetchAPI(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
   const response = await fetch(url, {
@@ -183,17 +218,19 @@ export const api = {
   getWorkflowActivities: async (workflowId) => {
     if (USE_MOCK_DATA) {
       await delay();
-      return getMockActivities(workflowId);
+      return getMockActivities(workflowId).map(normalizeActivity);
     }
-    return fetchAPI(`/workflows/${workflowId}/activities`);
+    const activities = await fetchAPI(`/workflows/${workflowId}/activities`);
+    return activities.map(normalizeActivity);
   },
 
   getWorkflowDelays: async (workflowId) => {
     if (USE_MOCK_DATA) {
       await delay();
-      return getMockDelays(workflowId);
+      return getMockDelays(workflowId).map(normalizeDelay);
     }
-    return fetchAPI(`/workflows/${workflowId}/delays`);
+    const delays = await fetchAPI(`/workflows/${workflowId}/delays`);
+    return delays.map(normalizeDelay);
   },
 
   // Events
@@ -227,28 +264,30 @@ export const api = {
   getActivities: async (params = {}) => {
     if (USE_MOCK_DATA) {
       await delay();
-      return getMockAllActivities(params);
+      return getMockAllActivities(params).map(normalizeActivity);
     }
     const query = new URLSearchParams();
     if (params.workflow_id) query.append('workflow_id', params.workflow_id);
     if (params.status) query.append('status', params.status);
     if (params.limit) query.append('limit', params.limit);
     if (params.offset) query.append('offset', params.offset);
-    return fetchAPI(`/activities?${query.toString()}`);
+    const activities = await fetchAPI(`/activities?${query.toString()}`);
+    return activities.map(normalizeActivity);
   },
 
   // Delays
   getDelays: async (params = {}) => {
     if (USE_MOCK_DATA) {
       await delay();
-      return getMockAllDelays(params);
+      return getMockAllDelays(params).map(normalizeDelay);
     }
     const query = new URLSearchParams();
     if (params.workflow_type) query.append('workflow_type', params.workflow_type);
     if (params.workflow_id) query.append('workflow_id', params.workflow_id);
     if (params.limit) query.append('limit', params.limit);
     if (params.offset) query.append('offset', params.offset);
-    return fetchAPI(`/delays?${query.toString()}`);
+    const delays = await fetchAPI(`/delays?${query.toString()}`);
+    return delays.map(normalizeDelay);
   },
 
   // Statistics
