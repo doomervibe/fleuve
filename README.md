@@ -229,6 +229,16 @@ See the [Step-by-Step Tutorial](#step-by-step-tutorial) for a complete working e
 pip install fleuve
 ```
 
+### Cursor Agent Skills (optional)
+
+If you use [Cursor](https://cursor.com/), install the bundled Fleuve Agent Skills into your application repository so the AI assistant follows framework conventions (workflows, testing harness, runner):
+
+```bash
+fleuve cursor-skills install
+```
+
+Run this from your project root; skills are copied to `.cursor/skills/`. Use `fleuve cursor-skills --help` for options (for example `--user` to install under `~/.cursor/skills` for all projects).
+
 ### Using Poetry (Recommended)
 
 ```bash
@@ -242,6 +252,10 @@ git clone https://github.com/doomervibe/fleuve.git
 cd fleuve
 poetry install
 ```
+
+### Runnable example
+
+See [examples/minimal](examples/minimal) for a small project with Docker Compose (PostgreSQL + NATS), `create_workflow_runner`, and a single workflow. Use it as a template for your own app.
 
 ### Setting Up Infrastructure
 

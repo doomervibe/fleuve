@@ -29,15 +29,14 @@ This checklist will help you prepare and publish the Fleuve package to GitHub an
 - [x] Issue templates created (bug, feature, question)
 - [x] Pull request template created
 - [x] CI/CD workflows configured:
-  - [x] tests.yml - Automated testing
-  - [x] lint.yml - Code quality checks
+  - [x] ci.yml - Tests (with coverage), Black, mypy, UI build
   - [x] publish.yml - PyPI publishing
 
 ### Code Quality
 - [x] No linter errors in fleuve/ package
 - [x] Tests present and comprehensive (131 tests)
 - [x] Type hints throughout codebase
-- [x] Examples directory with working examples
+- [x] `examples/minimal` runnable example (Docker Compose + Poetry)
 - [x] Documentation complete
 
 ## GitHub Publishing Steps

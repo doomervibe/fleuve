@@ -49,6 +49,21 @@ Thank you for your interest in contributing to Fleuve! This document provides gu
    poetry run pytest
    ```
 
+6. **Try the minimal example** (optional):
+   ```bash
+   cd examples/minimal && cp .env.example .env && docker compose up -d && poetry install && poetry run python -m minimal_example
+   ```
+
+## Cursor Agent Skills
+
+Bundled skills live in `fleuve/cursor_skills/` and are included in the PyPI package. After `poetry install`, install them into this repo so Cursor loads them:
+
+```bash
+poetry run fleuve cursor-skills install
+```
+
+That copies skills to `.cursor/skills/` at the project root. Use `poetry run fleuve cursor-skills path` to print the bundled directory. Edit the markdown under `fleuve/cursor_skills/` when updating skills.
+
 ## Development Workflow
 
 ### Code Style

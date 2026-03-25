@@ -865,6 +865,71 @@ def ui(
     )
 
 
+@cli.group("cursor-skills")
+def cursor_skills():
+    """Install bundled Cursor Agent Skills for Fleuve (workflow, testing, runner)."""
+
+
+@cursor_skills.command("install")
+@click.option(
+    "-d",
+    "--directory",
+    "project_root",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project root (default: current working directory). Skills are copied to .cursor/skills/ under this path.",
+)
+@click.option(
+    "--user",
+    is_flag=True,
+    help="Install to ~/.cursor/skills (available in all projects).",
+)
+def cursor_skills_install(project_root: Optional[Path], user: bool) -> None:
+    """Copy Fleuve Cursor skills into .cursor/skills for Cursor to load them.
+
+    After pip install fleuve, run from your application repo root::
+
+        fleuve cursor-skills install
+
+    Use --user to install into your home directory instead of the current project.
+    """
+    src = Path(__file__).resolve().parent / "cursor_skills"
+    if not src.is_dir():
+        click.echo(f"Error: bundled skills not found at {src}", err=True)
+        sys.exit(1)
+
+    if user:
+        dest_root = Path.home() / ".cursor" / "skills"
+    else:
+        root = project_root if project_root is not None else Path.cwd()
+        dest_root = root / ".cursor" / "skills"
+
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    for item in sorted(src.iterdir()):
+        if not item.is_dir() or item.name.startswith("_"):
+            continue
+        if not (item / "SKILL.md").exists():
+            continue
+        target = dest_root / item.name
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(item, target)
+        copied += 1
+
+    click.echo(
+        f"Installed {copied} Fleuve Cursor skill(s) to {dest_root}",
+    )
+
+
+@cursor_skills.command("path")
+def cursor_skills_path() -> None:
+    """Print the filesystem path to bundled skills (for manual copy or tooling)."""
+    src = Path(__file__).resolve().parent / "cursor_skills"
+    click.echo(str(src))
+
+
 @cli.command("validate")
 @click.argument("module", required=False)
 def validate(module):

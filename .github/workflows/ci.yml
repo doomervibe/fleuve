@@ -2,9 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main, master]
 
 jobs:
   test:
@@ -13,31 +12,39 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: pguser
-          POSTGRES_PASSWORD: pg123
-          POSTGRES_DB: db1
-        ports: ['5432:5432']
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fleuve_test
+        ports:
+          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+
+      nats:
+        image: nats:latest
+        options: >-
+          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8222/healthz || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 4222:4222
+          - 8222:8222
+        args: ["-js"]
+
     env:
-      TEST_DATABASE_URL: postgresql+asyncpg://pguser:pg123@localhost:5432/db1
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/fleuve_test
       TEST_NATS_URL: nats://localhost:4222
       TEST_STORAGE_KEY: test-storage-key-32-characters-long!
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start NATS with JetStream
-        run: |
-          docker run -d -p 4222:4222 --name nats nats:latest -js
-          sleep 3
-
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: "3.13"
 
       - name: Install Poetry
         uses: snok/install-poetry@v1
@@ -63,8 +70,19 @@ jobs:
       - name: Build UI (for package)
         run: poetry run python scripts/build_ui.py
 
-      - name: Run tests
-        run: poetry run pytest fleuve/tests -v
+      - name: Run tests with coverage
+        run: poetry run pytest fleuve/tests -v --cov=fleuve --cov-report=xml --cov-report=term
 
-      - name: Lint
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Check formatting (Black)
         run: poetry run black --check fleuve
+
+      - name: Type check (mypy)
+        run: poetry run mypy fleuve

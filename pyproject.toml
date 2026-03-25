@@ -60,6 +60,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry]
 include = [
     { path = "fleuve/ui/frontend_dist/**/*", format = ["sdist", "wheel"] },
+    { path = "fleuve/cursor_skills/**/*", format = ["sdist", "wheel"] },
 ]
 
 [project.optional-dependencies]

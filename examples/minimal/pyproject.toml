@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "fleuve-minimal-example"
+version = "0.1.0"
+description = "Minimal runnable Fleuve workflow (PostgreSQL + NATS)"
+readme = "README.md"
+packages = [{ include = "minimal_example" }]
+
+[tool.poetry.dependencies]
+python = "^3.13"
+fleuve = { path = "../..", develop = true }
+python-dotenv = "^1.0.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

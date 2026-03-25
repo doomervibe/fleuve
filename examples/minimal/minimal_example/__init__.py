@@ -1,0 +1,1 @@
+"""Minimal Fleuve example application."""

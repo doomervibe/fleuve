@@ -19,6 +19,10 @@ recursive-include fleuve/ui/frontend_dist *
 # Include type checking marker
 include fleuve/py.typed
 
+# Cursor Agent Skills (markdown)
+recursive-include fleuve/cursor_skills *.md
+include fleuve/cursor_skills/__init__.py
+
 # Exclude test files from distribution
 recursive-exclude fleuve/tests *
 
