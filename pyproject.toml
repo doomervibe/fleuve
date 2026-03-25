@@ -95,6 +95,7 @@ disable_error_code = ["var-annotated", "no-any-return", "arg-type"]
 [dependency-groups]
 dev = [
     "pytest (>=9.0.1,<10.0.0)",
+    "pytest-cov (>=4.0.0,<8.0.0)",
     "pytest-asyncio (==1.3.0)",
     "black (>=25.12.0,<26.0.0)",
     "mypy (>=1.19.1,<2.0.0)",
