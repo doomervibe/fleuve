@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any, Generator, Protocol
 
 # ---------------------------------------------------------------------------
 # Prometheus backend (optional)
@@ -114,6 +114,18 @@ class _OtelGaugeNoop:
         pass
 
 
+class _SupportsOtelAdd(Protocol):
+    """Counter / UpDownCounter–like API (real OTEL or noop)."""
+
+    def add(self, amount: float = 1, attributes: Any = None) -> None: ...
+
+
+class _SupportsOtelRecord(Protocol):
+    """Histogram–like API (real OTEL or noop)."""
+
+    def record(self, amount: float, attributes: Any = None) -> None: ...
+
+
 class FleuveMetrics:
     """Metrics collector for Fleuve workflows — Prometheus and/or OpenTelemetry.
 
@@ -134,6 +146,16 @@ class FleuveMetrics:
         metrics.record_action_failed("TimeoutError")
         metrics.set_active_workflows(42)
     """
+
+    _otel_events_processed: _SupportsOtelAdd
+    _otel_commands_processed: _SupportsOtelAdd
+    _otel_command_latency: _SupportsOtelRecord
+    _otel_actions_executed: _SupportsOtelAdd
+    _otel_actions_failed: _SupportsOtelAdd
+    _otel_action_duration: _SupportsOtelRecord
+    _otel_state_load_time: _SupportsOtelRecord
+    _otel_active_workflows: _SupportsOtelAdd
+    _otel_pending_delays: _SupportsOtelAdd
 
     def __init__(
         self,
