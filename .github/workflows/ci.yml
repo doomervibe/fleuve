@@ -22,18 +22,6 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      nats:
-        image: nats:latest
-        options: >-
-          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8222/healthz || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 4222:4222
-          - 8222:8222
-        args: ["-js"]
-
     env:
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/fleuve_test
       TEST_NATS_URL: nats://localhost:4222
@@ -41,6 +29,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Service containers do not support Docker Compose-style `args`; JetStream needs `-js`.
+      - name: Start NATS with JetStream
+        run: |
+          docker run -d --name nats -p 4222:4222 -p 8222:8222 nats:latest -js
+          sleep 3
 
       - uses: actions/setup-python@v5
         with:
