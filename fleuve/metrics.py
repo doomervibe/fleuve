@@ -100,12 +100,12 @@ except ImportError:
 
 
 class _OtelCounterNoop:
-    def add(self, amount: float = 1, attributes: dict | None = None) -> None:
+    def add(self, *args: Any, **kwargs: Any) -> None:
         pass
 
 
 class _OtelHistogramNoop:
-    def record(self, amount: float, attributes: dict | None = None) -> None:
+    def record(self, *args: Any, **kwargs: Any) -> None:
         pass
 
 
@@ -115,15 +115,19 @@ class _OtelGaugeNoop:
 
 
 class _SupportsOtelAdd(Protocol):
-    """Counter / UpDownCounter–like API (real OTEL or noop)."""
+    """Counter / UpDownCounter–like API (real OTEL or noop).
 
-    def add(self, amount: float = 1, attributes: Any = None) -> None: ...
+    Kept permissive (``*args`` / ``**kwargs``) so OpenTelemetry SDK stubs
+    (required ``amount``, ``context=``, typed ``attributes``) and no-ops align.
+    """
+
+    def add(self, *args: Any, **kwargs: Any) -> None: ...
 
 
 class _SupportsOtelRecord(Protocol):
     """Histogram–like API (real OTEL or noop)."""
 
-    def record(self, amount: float, attributes: Any = None) -> None: ...
+    def record(self, *args: Any, **kwargs: Any) -> None: ...
 
 
 class FleuveMetrics:
