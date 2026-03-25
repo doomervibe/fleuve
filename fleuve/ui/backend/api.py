@@ -66,9 +66,9 @@ class FleuveUIBackend:
         self.delay_schedule_model = delay_schedule_model
         self.subscription_model = subscription_model
         self.frontend_dist_path = frontend_dist_path
-        self.ui_title = os.getenv("FLEUVE_UI_TITLE") or Path.cwd().name.replace(
-            "_", " "
-        ).title()
+        self.ui_title = (
+            os.getenv("FLEUVE_UI_TITLE") or Path.cwd().name.replace("_", " ").title()
+        )
 
         self.app = FastAPI(title="Fleuve Framework UI", version="1.0.0")
         self._setup_routes()
@@ -616,7 +616,9 @@ class FleuveUIBackend:
                 )
 
                 activity_rows = result.scalars().all()
-                event_map: Dict[tuple[str, int], tuple[Optional[str], Dict[str, Any]]] = {}
+                event_map: Dict[
+                    tuple[str, int], tuple[Optional[str], Dict[str, Any]]
+                ] = {}
                 workflow_ids = {a.workflow_id for a in activity_rows}
                 event_numbers = {
                     a.event_number
@@ -637,7 +639,12 @@ class FleuveUIBackend:
                             )
                         )
                     )
-                    for workflow_id_val, version, ev_type, ev_body in event_result.fetchall():
+                    for (
+                        workflow_id_val,
+                        version,
+                        ev_type,
+                        ev_body,
+                    ) in event_result.fetchall():
                         event_map[(workflow_id_val, version)] = (
                             ev_type,
                             _to_plain_dict(ev_body),
@@ -650,7 +657,9 @@ class FleuveUIBackend:
                         (activity.workflow_id, activity.event_number),
                         (None, {}),
                     )
-                    action_type = _derive_action_type(checkpoint, event_type, event_body)
+                    action_type = _derive_action_type(
+                        checkpoint, event_type, event_body
+                    )
 
                     activities.append(
                         ActivityResponse(
