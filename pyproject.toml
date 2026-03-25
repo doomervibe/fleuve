@@ -45,7 +45,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/doomervibe/fleuve"
-Documentation = "https://github.com/doomervibe/fleuve#readme"
+Documentation = "https://doomervibe.github.io/fleuve/"
 Repository = "https://github.com/doomervibe/fleuve"
 Issues = "https://github.com/doomervibe/fleuve/issues"
 
@@ -101,4 +101,6 @@ dev = [
     "mypy (>=1.19.1,<2.0.0)",
     "types-croniter",
     "httpx (>=0.28.0,<1.0.0)",
+    "mkdocs (>=1.6.0,<2.0.0)",
+    "mkdocs-material (>=9.5.0,<10.0.0)",
 ]

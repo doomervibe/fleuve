@@ -27,6 +27,8 @@ If you're considering [Temporal](https://temporal.io/) or similar workflow engin
 
 **Choose Fleuve when** you want event sourcing, own your data in PostgreSQL, prefer a lighter deployment (no dedicated workflow server), or need tight Python/Pydantic integration. **Choose Temporal when** you need multi-language workers, a managed cloud offering, or Temporal's broader ecosystem.
 
+**Documentation site:** [doomervibe.github.io/fleuve](https://doomervibe.github.io/fleuve/) (MkDocs; also run locally with `poetry run mkdocs serve`).
+
 ## Table of Contents
 
 - [Why Fleuve? (vs Temporal)](#why-fleuve-vs-temporal)

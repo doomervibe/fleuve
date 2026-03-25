@@ -30,6 +30,7 @@ This checklist will help you prepare and publish the Fleuve package to GitHub an
 - [x] Pull request template created
 - [x] CI/CD workflows configured:
   - [x] ci.yml - Tests (with coverage), Black, mypy, UI build
+  - [x] docs.yml - MkDocs build (strict); deploy to GitHub Pages on main
   - [x] publish.yml - PyPI publishing
 
 ### Code Quality

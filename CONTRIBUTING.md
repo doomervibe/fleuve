@@ -101,6 +101,7 @@ That copies skills to `.cursor/skills/` at the project root. Use `poetry run fle
 - **Docstrings**: All public functions, classes, and methods should have docstrings
 - **Type hints**: Use type hints in function signatures
 - **README**: Update README.md if adding new features or changing behavior
+- **Docs site**: The MkDocs project lives at the repo root (`mkdocs.yml`, `docs/`). Preview with `poetry run mkdocs serve`; ensure `poetry run mkdocs build --strict` passes before merging substantive doc changes
 - **Examples**: Add examples to the examples/ directory for new features
 
 ## Submitting Changes

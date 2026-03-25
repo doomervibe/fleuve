@@ -1,0 +1,67 @@
+site_name: Fleuve
+site_description: Type-safe event-sourced workflow framework for Python
+site_author: Fleuve contributors
+site_url: https://doomervibe.github.io/fleuve/
+repo_url: https://github.com/doomervibe/fleuve
+repo_name: doomervibe/fleuve
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Quick start: quick-start.md
+  - Core concepts: concepts.md
+  - Guides:
+      - Partitioning & scaling: scaling.md
+      - Production deployment: deployment.md
+  - Reference:
+      - Full narrative (README): readme.md
+      - Go port (architecture): FLEUVE_GO_PORT_ARCHITECTURE.md
+      - Repository files: repository.md
+  - Contributing: contributing.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/doomervibe/fleuve
+
+copyright: Copyright &copy; Fleuve contributors — MIT License
+
+strict: true
