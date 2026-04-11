@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any, Callable, Generic, Type, TypeVar
 
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fleuve.model import (
@@ -22,6 +22,11 @@ from fleuve.stream import ConsumedEvent
 from fleuve.tracing import _NoopTracer
 
 logger = logging.getLogger(__name__)
+
+
+class EmptyActionError(RuntimeError):
+    """Raised when act_on yields zero items; the adapter is considered misconfigured."""
+
 
 C = TypeVar("C", bound=BaseModel)  # Command type
 E = TypeVar("E", bound=BaseModel)  # Event type
@@ -49,6 +54,7 @@ class ActionExecutor(Generic[C, Ae]):
         repo: AsyncRepo,
         max_retries: int = 3,
         recovery_interval: datetime.timedelta = datetime.timedelta(seconds=30),
+        recovery_stale_after: datetime.timedelta = datetime.timedelta(minutes=1),
         action_timeout: datetime.timedelta | None = None,
         on_action_failed: (
             Callable[[str, int, Exception], Awaitable[None]] | None
@@ -68,6 +74,7 @@ class ActionExecutor(Generic[C, Ae]):
         self._repo = repo
         self._max_retries = max_retries
         self._recovery_interval = recovery_interval
+        self._recovery_stale_after = recovery_stale_after
         self._action_timeout = action_timeout
         self._on_action_failed = on_action_failed
         self._tracer = tracer or _NoopTracer()
@@ -346,10 +353,10 @@ class ActionExecutor(Generic[C, Ae]):
                 # act_on is an async generator yielding commands, CheckpointYield, and optionally ActionTimeout
                 try:
 
-                    async def consume_commands() -> None:
+                    async def consume_commands() -> int:
                         gen = self._adapter.act_on(event, context)
                         try:
-                            await self._consume_action_generator(
+                            return await self._consume_action_generator(
                                 gen,
                                 workflow_id,
                                 event_number,
@@ -359,12 +366,12 @@ class ActionExecutor(Generic[C, Ae]):
                             await gen.aclose()
 
                     if self._action_timeout:
-                        await asyncio.wait_for(
+                        yielded = await asyncio.wait_for(
                             consume_commands(),
                             timeout=self._action_timeout.total_seconds(),
                         )
                     else:
-                        await consume_commands()
+                        yielded = await consume_commands()
                 except Exception:
                     # Save checkpoint even on failure for resume capability
                     if context.checkpoint != activity.checkpoint:
@@ -396,18 +403,29 @@ class ActionExecutor(Generic[C, Ae]):
                 activity.checkpoint = context.checkpoint
                 activity.retry_policy = context.retry_policy
 
-                # Commands were processed during consume_commands() above
+                if yielded == 0:
+                    raise EmptyActionError(
+                        f"Adapter act_on yielded zero items for "
+                        f"{workflow_id}:{event_number} "
+                        f"({type(event.event).__name__}); refusing to mark completed."
+                    )
 
                 # Action completed successfully - mark as completed after command processing
                 async with self._session_maker() as s:
-                    await self._mark_action_completed(
+                    marked = await self._mark_action_completed(
                         s, workflow_id, event_number, result=None
                     )
 
-                logger.info(
-                    f"Action completed for {workflow_id}:{event_number} "
-                    f"(retry_count={retry_count})"
-                )
+                if marked:
+                    logger.info(
+                        f"Action completed for {workflow_id}:{event_number} "
+                        f"(retry_count={retry_count})"
+                    )
+                else:
+                    logger.info(
+                        f"Action completion not applied for {workflow_id}:{event_number} "
+                        f"(activity no longer active; likely cancelled)"
+                    )
                 return
 
             except asyncio.CancelledError:
@@ -468,12 +486,20 @@ class ActionExecutor(Generic[C, Ae]):
         if last_exception is None:
             last_exception = RuntimeError("Action failed after all retries")
         async with self._session_maker() as s:
-            await self._mark_action_failed(s, workflow_id, event_number, last_exception)
-        logger.error(
-            f"Action failed permanently for {workflow_id}:{event_number} "
-            f"after {activity.retry_policy.max_retries + 1} attempts"
-        )
-        if self._on_action_failed and last_exception is not None:
+            marked = await self._mark_action_failed(
+                s, workflow_id, event_number, last_exception
+            )
+        if marked:
+            logger.error(
+                f"Action failed permanently for {workflow_id}:{event_number} "
+                f"after {activity.retry_policy.max_retries + 1} attempts"
+            )
+        else:
+            logger.info(
+                f"Permanent failure not recorded for {workflow_id}:{event_number} "
+                f"(activity no longer active; likely cancelled)"
+            )
+        if marked and self._on_action_failed and last_exception is not None:
             try:
                 await self._on_action_failed(workflow_id, event_number, last_exception)
             except Exception as e:
@@ -505,15 +531,19 @@ class ActionExecutor(Generic[C, Ae]):
         workflow_id: str,
         event_number: int,
         context: ActionContext,
-    ) -> None:
-        """Consume act_on async generator; apply ActionTimeout via asyncio.wait_for."""
+    ) -> int:
+        """Consume act_on async generator; apply ActionTimeout via asyncio.wait_for.
+
+        Returns the number of non-ActionTimeout items yielded (commands + checkpoints).
+        """
+        count = 0
         while True:
             try:
                 item = await gen.__anext__()
             except StopAsyncIteration:
-                return
+                return count
             if isinstance(item, ActionTimeout):
-                await asyncio.wait_for(
+                count += await asyncio.wait_for(
                     self._consume_action_generator(
                         gen, workflow_id, event_number, context
                     ),
@@ -523,6 +553,7 @@ class ActionExecutor(Generic[C, Ae]):
                 await self._process_action_item(
                     item, workflow_id, event_number, context
                 )
+                count += 1
 
     async def _recovery_loop(self):
         """Periodically check for interrupted actions and resume them."""
@@ -535,30 +566,49 @@ class ActionExecutor(Generic[C, Ae]):
             await asyncio.sleep(self._recovery_interval.total_seconds())
 
     async def _recover_interrupted_actions(self):
-        """Find and resume interrupted actions."""
-        # Find actions that are in "running" or "retrying" state but haven't been updated recently
-        threshold = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-            minutes=5
+        """Find and resume interrupted actions.
+
+        - ``pending``: row exists but execution never started (e.g. crash after insert).
+        - ``running`` / ``retrying``: stale ``last_attempt_at`` (process died mid-run).
+
+        Active ``running`` / ``retrying`` rows with a recent ``last_attempt_at`` are left
+        alone to avoid racing another live runner.
+
+        Uses SELECT … FOR UPDATE SKIP LOCKED so concurrent workers claim disjoint sets
+        of rows (Fix 3).  Validates to_be_act_on before re-firing; marks FAILED when no
+        handler is registered (Fix 4).
+        """
+        threshold = datetime.datetime.now(
+            datetime.timezone.utc
+        ) - self._recovery_stale_after
+
+        stale_running_or_retrying = and_(
+            self._db_activity_model.status.in_(
+                [ActionStatus.RUNNING.value, ActionStatus.RETRYING.value]
+            ),
+            or_(
+                self._db_activity_model.last_attempt_at < threshold,
+                self._db_activity_model.last_attempt_at.is_(None),
+            ),
         )
+
+        events_to_fire: list[ConsumedEvent] = []
 
         async with self._session_maker() as s:
             result = await s.execute(
                 select(self._db_activity_model)
                 .where(
-                    self._db_activity_model.status.in_(
-                        [ActionStatus.RUNNING, ActionStatus.RETRYING]
+                    or_(
+                        self._db_activity_model.status == ActionStatus.PENDING.value,
+                        stale_running_or_retrying,
                     )
                 )
-                .where(
-                    (self._db_activity_model.last_attempt_at < threshold)
-                    | (self._db_activity_model.last_attempt_at.is_(None))
-                )
+                .with_for_update(skip_locked=True)
             )
             interrupted_activities = result.scalars().all()
 
-        for activity in interrupted_activities:
-            # Reconstruct the event from the database
-            async with self._session_maker() as s:
+            for activity in interrupted_activities:
+                # Reconstruct the event from the database within the same transaction
                 event_result = await s.execute(
                     select(self._db_event_model)
                     .where(self._db_event_model.workflow_id == activity.workflow_id)
@@ -569,25 +619,63 @@ class ActionExecutor(Generic[C, Ae]):
                 )
                 event_row = event_result.scalar_one_or_none()
 
-                if event_row:
-                    event = ConsumedEvent(
-                        workflow_id=activity.workflow_id,
-                        event_no=activity.event_number,
-                        event=event_row.body,
-                        global_id=event_row.global_id,
-                        at=event_row.at,
-                        workflow_type=getattr(
-                            event_row, "workflow_type", self._repo._workflow_type
-                        ),
-                        event_type=getattr(event_row, "event_type", ""),
-                        metadata_=getattr(event_row, "metadata_", None) or {},
-                        reader_name=self._runner_name,
+                if event_row is None:
+                    continue
+
+                event = ConsumedEvent(
+                    workflow_id=activity.workflow_id,
+                    event_no=activity.event_number,
+                    event=event_row.body,
+                    global_id=event_row.global_id,
+                    at=event_row.at,
+                    workflow_type=getattr(
+                        event_row, "workflow_type", self._repo._workflow_type
+                    ),
+                    event_type=getattr(event_row, "event_type", ""),
+                    metadata_=getattr(event_row, "metadata_", None) or {},
+                    reader_name=self._runner_name,
+                )
+
+                # Fix 4: refuse to re-fire events whose handler is no longer registered
+                if not self._adapter.to_be_act_on(event):
+                    error_msg = (
+                        f"no handler registered for event type "
+                        f"'{type(event.event).__name__}' at recovery time; "
+                        f"marking activity as failed"
                     )
-                    logger.info(
-                        f"Recovering interrupted action for {activity.workflow_id}:{activity.event_number}"
+                    logger.warning(
+                        f"Recovery: {error_msg} "
+                        f"({activity.workflow_id}:{activity.event_number})"
                     )
-                    # Resume the action
-                    await self.execute_action(event)
+                    await s.execute(
+                        update(self._db_activity_model)
+                        .where(
+                            self._db_activity_model.workflow_id
+                            == activity.workflow_id
+                        )
+                        .where(
+                            self._db_activity_model.event_number
+                            == activity.event_number
+                        )
+                        .values(
+                            status=ActionStatus.FAILED.value,
+                            finished_at=datetime.datetime.now(datetime.timezone.utc),
+                            error_type="RecoveryHandlerMissing",
+                            error_message=error_msg,
+                        )
+                    )
+                    continue
+
+                events_to_fire.append(event)
+
+            # Commit releases the FOR UPDATE row locks
+            await s.commit()
+
+        for event in events_to_fire:
+            logger.info(
+                f"Recovering interrupted action for {event.workflow_id}:{event.event_no}"
+            )
+            await self.execute_action(event)
 
     async def _get_activity(
         self, s: AsyncSession, workflow_id: str, event_number: int
@@ -676,8 +764,12 @@ class ActionExecutor(Generic[C, Ae]):
         workflow_id: str,
         event_number: int,
         result: bytes | None = None,
-    ):
-        """Mark an action as completed."""
+    ) -> bool:
+        """Mark an action as completed.
+
+        Only updates rows still in an active execution state so a concurrent cancel
+        cannot be overwritten by completion.
+        """
         values = {
             "status": ActionStatus.COMPLETED.value,
             "finished_at": datetime.datetime.now(datetime.timezone.utc),
@@ -685,23 +777,37 @@ class ActionExecutor(Generic[C, Ae]):
         if result:
             values["result"] = result
 
-        await s.execute(
+        res = await s.execute(
             update(self._db_activity_model)
             .where(self._db_activity_model.workflow_id == workflow_id)
             .where(self._db_activity_model.event_number == event_number)
+            .where(
+                self._db_activity_model.status.in_(
+                    [ActionStatus.RUNNING.value, ActionStatus.RETRYING.value]
+                )
+            )
             .values(**values)
         )
         await s.commit()
+        return (res.rowcount or 0) > 0
 
     async def _save_checkpoint(
         self, s: AsyncSession, workflow_id: str, event_number: int, checkpoint: dict
     ):
-        """Save checkpoint data for an action."""
+        """Save checkpoint data for an action and refresh last_attempt_at.
+
+        Bumping last_attempt_at here keeps actively-checkpointing attempts
+        invisible to the staleness selector in _recover_interrupted_actions,
+        which uses last_attempt_at < threshold to detect dead workers.
+        """
         await s.execute(
             update(self._db_activity_model)
             .where(self._db_activity_model.workflow_id == workflow_id)
             .where(self._db_activity_model.event_number == event_number)
-            .values(checkpoint=checkpoint)
+            .values(
+                checkpoint=checkpoint,
+                last_attempt_at=datetime.datetime.now(datetime.timezone.utc),
+            )
         )
         await s.commit()
 
@@ -723,13 +829,22 @@ class ActionExecutor(Generic[C, Ae]):
 
     async def _mark_action_failed(
         self, s: AsyncSession, workflow_id: str, event_number: int, exception: Exception
-    ):
-        """Mark an action as permanently failed."""
+    ) -> bool:
+        """Mark an action as permanently failed.
+
+        Only updates rows still in an active execution state so cancel is not
+        overwritten by failure.
+        """
         error_type = type(exception).__name__
-        await s.execute(
+        res = await s.execute(
             update(self._db_activity_model)
             .where(self._db_activity_model.workflow_id == workflow_id)
             .where(self._db_activity_model.event_number == event_number)
+            .where(
+                self._db_activity_model.status.in_(
+                    [ActionStatus.RUNNING.value, ActionStatus.RETRYING.value]
+                )
+            )
             .values(
                 status=ActionStatus.FAILED.value,
                 finished_at=datetime.datetime.now(datetime.timezone.utc),
@@ -738,5 +853,9 @@ class ActionExecutor(Generic[C, Ae]):
             )
         )
         await s.commit()
-        if self._metrics is not None and hasattr(self._metrics, "record_failed_action"):
+        updated = (res.rowcount or 0) > 0
+        if updated and self._metrics is not None and hasattr(
+            self._metrics, "record_failed_action"
+        ):
             self._metrics.record_failed_action(error_type)
+        return updated
