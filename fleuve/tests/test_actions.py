@@ -65,6 +65,7 @@ class TestActionExecutor:
 
         repo = AsyncMock()
         repo.process_command = AsyncMock(return_value=None)
+        repo._workflow_type = "test_workflow"
         return repo
 
     @pytest.fixture
@@ -1051,6 +1052,7 @@ class TestActionConcurrencyLimits:
     def mock_repo(self):
         repo = AsyncMock()
         repo.process_command = AsyncMock(return_value=None)
+        repo._workflow_type = "test_workflow"
         return repo
 
     async def _wait_for_executor(self, executor: ActionExecutor) -> None:
@@ -1366,6 +1368,7 @@ class TestCompletionInvariant:
 
         repo = AsyncMock()
         repo.process_command = AsyncMock(return_value=None)
+        repo._workflow_type = "test_workflow"
         return repo
 
     async def _wait_for_executor(self, executor: ActionExecutor) -> None:
@@ -1727,6 +1730,113 @@ class TestCompletionInvariant:
             assert "no handler" in (activity.error_message or "").lower()
 
         assert fire_count == 0, "execute_action must not be called when handler is missing"
+
+    @pytest.mark.asyncio
+    async def test_recovery_ignores_other_workflow_types(
+        self,
+        test_session_maker,
+        test_activity_model,
+        test_event_model,
+        clean_tables,
+        mock_repo,
+    ):
+        """Recovery must not pick up activities belonging to a different workflow type.
+
+        Regression guard: when multiple runner types share the same activity table,
+        each runner must only recover its own workflow type's activities.
+        """
+        from fleuve.tests.conftest import TestEvent
+
+        fire_count = 0
+
+        class TrackingAdapter(Adapter):
+            async def act_on(self, event, context=None):
+                nonlocal fire_count
+                fire_count += 1
+                yield CheckpointYield(data={})
+
+            def to_be_act_on(self, event):
+                return True
+
+        # This runner handles "test_workflow"
+        mock_repo._workflow_type = "test_workflow"
+        executor = ActionExecutor(
+            session_maker=test_session_maker,
+            adapter=TrackingAdapter(),
+            db_activity_model=test_activity_model,
+            db_event_model=test_event_model,
+            repo=mock_repo,
+            recovery_stale_after=datetime.timedelta(seconds=0),
+        )
+
+        stale_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            minutes=10
+        )
+        async with test_session_maker() as s:
+            # Activity for a DIFFERENT workflow type ("other_workflow")
+            s.add(
+                test_activity_model(
+                    workflow_id="wf-other",
+                    event_number=1,
+                    status=ActionStatus.RUNNING.value,
+                    max_retries=3,
+                    last_attempt_at=stale_time,
+                )
+            )
+            s.add(
+                test_event_model(
+                    workflow_id="wf-other",
+                    workflow_version=1,
+                    global_id=100,
+                    at=datetime.datetime.now(datetime.timezone.utc),
+                    body=TestEvent(value=1),
+                    workflow_type="other_workflow",  # different type
+                    event_type="test_event",
+                )
+            )
+            # Activity for THIS runner's workflow type ("test_workflow")
+            s.add(
+                test_activity_model(
+                    workflow_id="wf-mine",
+                    event_number=1,
+                    status=ActionStatus.RUNNING.value,
+                    max_retries=3,
+                    last_attempt_at=stale_time,
+                )
+            )
+            s.add(
+                test_event_model(
+                    workflow_id="wf-mine",
+                    workflow_version=1,
+                    global_id=101,
+                    at=datetime.datetime.now(datetime.timezone.utc),
+                    body=TestEvent(value=1),
+                    workflow_type="test_workflow",  # matches this runner
+                    event_type="test_event",
+                )
+            )
+            await s.commit()
+
+        await executor._recover_interrupted_actions()
+        await self._wait_for_executor(executor)
+
+        assert fire_count == 1, (
+            f"Expected exactly 1 fire (own workflow type only), got {fire_count}"
+        )
+
+        # Verify the other-type activity was NOT touched (still RUNNING, not failed)
+        from sqlalchemy import select as sa_select
+
+        async with test_session_maker() as s:
+            other_activity = await s.scalar(
+                sa_select(test_activity_model)
+                .where(test_activity_model.workflow_id == "wf-other")
+                .where(test_activity_model.event_number == 1)
+            )
+            assert other_activity is not None
+            assert other_activity.status == ActionStatus.RUNNING, (
+                "Activity of another workflow type must not be touched by this runner"
+            )
 
     @pytest.mark.asyncio
     async def test_long_running_attempt_not_recovered_while_checkpointing(

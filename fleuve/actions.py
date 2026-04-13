@@ -575,8 +575,15 @@ class ActionExecutor(Generic[C, Ae]):
         alone to avoid racing another live runner.
 
         Uses SELECT … FOR UPDATE SKIP LOCKED so concurrent workers claim disjoint sets
-        of rows (Fix 3).  Validates to_be_act_on before re-firing; marks FAILED when no
-        handler is registered (Fix 4).
+        of rows (Fix 3).
+
+        Activities belonging to a different workflow type are silently skipped —
+        the row lock is released on commit so the correct runner can claim it on
+        its next recovery cycle.  This prevents a runner from permanently failing
+        activities that belong to another runner type (Fix 5).
+
+        Validates to_be_act_on before re-firing; marks FAILED when no handler is
+        registered (Fix 4).
         """
         threshold = datetime.datetime.now(
             datetime.timezone.utc
@@ -636,7 +643,25 @@ class ActionExecutor(Generic[C, Ae]):
                     reader_name=self._runner_name,
                 )
 
-                # Fix 4: refuse to re-fire events whose handler is no longer registered
+                # Fix 4: skip activities whose workflow_type does not belong to this
+                # runner.  When multiple runner types share one activity table each
+                # runner must only process its own type; activities belonging to other
+                # runners are released (lock released on commit) so the correct runner
+                # can pick them up on its next recovery cycle.
+                event_workflow_type = getattr(event_row, "workflow_type", None)
+                if (
+                    event_workflow_type is not None
+                    and event_workflow_type != self._repo._workflow_type
+                ):
+                    logger.debug(
+                        f"Recovery: skipping activity for workflow_type "
+                        f"'{event_workflow_type}' (this runner handles "
+                        f"'{self._repo._workflow_type}'); "
+                        f"({activity.workflow_id}:{activity.event_number})"
+                    )
+                    continue
+
+                # Fix 4b: refuse to re-fire events whose handler is no longer registered
                 if not self._adapter.to_be_act_on(event):
                     error_msg = (
                         f"no handler registered for event type "
