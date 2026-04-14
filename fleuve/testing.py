@@ -12,13 +12,19 @@ Example::
     assert state.some_field == expected
 
     # Advance simulated time so pending delays fire
-    await harness.advance_time(timedelta(seconds=5))
+    await harness.advance(hours=1)
+
+    # Check what was emitted
+    assert len(harness.emitted(MyEvent)) == 1
 
     # Assert subscription state
     harness.assert_subscriptions("wf-1", [Sub(workflow_id="*", event_type="order.*")])
 
     # What-if simulation (does not mutate harness state)
     result = harness.simulate("wf-1", AnotherCommand())
+
+    # Test adapter side effects without DB/NATS
+    commands = await harness.run_handler(MyEvent(...), MyAdapter(), workflow_id="wf-1")
 """
 
 from __future__ import annotations
@@ -32,7 +38,11 @@ from typing import Any, Generic, Type, TypeVar
 from pydantic import BaseModel
 
 from fleuve.model import (
+    ActionContext,
+    Adapter,
     AlreadyExists,
+    CheckpointYield,
+    ActionTimeout,
     EvDelay,
     EvDelayComplete,
     Rejection,
@@ -40,7 +50,9 @@ from fleuve.model import (
     Sub,
     Workflow,
 )
+from fleuve.postgres import RetryPolicy
 from fleuve.repo import StoredState
+from fleuve.stream import ConsumedEvent
 
 C = TypeVar("C", bound=BaseModel)
 E = TypeVar("E", bound=BaseModel)
@@ -64,7 +76,9 @@ class WorkflowTestHarness(Generic[Wf]):
     Supports:
     - ``send_command`` — run a command and return the new state + events
     - ``create_new`` — create a new workflow instance
-    - ``advance_time`` — fire all pending delays whose fire time ≤ now + delta
+    - ``advance`` / ``advance_time`` — fire pending delays whose fire time ≤ now + delta
+    - ``emitted`` — return all events of a given type emitted since harness creation
+    - ``run_handler`` — run an adapter handler and collect yielded commands
     - ``assert_subscriptions`` — assert expected subscriptions for a workflow
     - ``simulate`` — what-if command without mutating harness state
     - ``get_state`` — retrieve current state for a workflow ID
@@ -72,9 +86,8 @@ class WorkflowTestHarness(Generic[Wf]):
     Limitations (by design):
     - No persistence; everything is in memory and lost when the harness is
       garbage-collected.
-    - Side effects (``act_on``) are **not** executed; only decide/evolve are
-      run.  Use real integration tests with a database for full side-effect
-      coverage.
+    - Side effects (``act_on``) are **not** executed by ``send_command``; only
+      decide/evolve are run.  Use ``run_handler`` to explicitly test an adapter.
     - No real NATS or DB connectivity.
     """
 
@@ -85,6 +98,8 @@ class WorkflowTestHarness(Generic[Wf]):
         self._simulated_now: datetime.datetime = datetime.datetime.now(
             datetime.timezone.utc
         )
+        # Flat log of every event emitted (decide output + delay fires), in order.
+        self._event_log: list[Any] = []
 
     # ------------------------------------------------------------------
     # Core commands
@@ -109,6 +124,7 @@ class WorkflowTestHarness(Generic[Wf]):
         state = self._workflow_type.evolve_(None, events)
         ss = StoredState(id=workflow_id, state=state, version=len(events))
         self._states[workflow_id] = ss
+        self._event_log.extend(events)
         self._register_delays(workflow_id, events, len(events))
         return ss, events
 
@@ -140,6 +156,7 @@ class WorkflowTestHarness(Generic[Wf]):
         new_version = stored.version + len(events)
         ss = StoredState(id=workflow_id, state=new_state, version=new_version)
         self._states[workflow_id] = ss
+        self._event_log.extend(events)
         self._register_delays(workflow_id, events, new_version)
         return ss, events
 
@@ -149,7 +166,7 @@ class WorkflowTestHarness(Generic[Wf]):
         """What-if simulation: apply a command without mutating harness state.
 
         Returns ``(StoredState, events)`` or ``Rejection``.
-        Does **not** persist the result.
+        Does **not** persist the result or append to the event log.
         """
         if workflow_id not in self._states:
             raise KeyError(f"Workflow '{workflow_id}' not found in harness")
@@ -176,6 +193,25 @@ class WorkflowTestHarness(Generic[Wf]):
     # ------------------------------------------------------------------
     # Time helpers
     # ------------------------------------------------------------------
+
+    async def advance(
+        self,
+        *,
+        hours: float = 0,
+        minutes: float = 0,
+        seconds: float = 0,
+    ) -> list[tuple[str, Any]]:
+        """Fire pending delays within the given wall-clock offset.
+
+        Keyword-arg sugar over ``advance_time``::
+
+            await harness.advance(hours=6)
+            await harness.advance(minutes=30, seconds=15)
+
+        Returns a list of ``(workflow_id, EvDelayComplete)`` tuples.
+        """
+        delta = datetime.timedelta(hours=hours, minutes=minutes, seconds=seconds)
+        return await self.advance_time(delta)
 
     async def advance_time(self, delta: datetime.timedelta) -> list[tuple[str, Any]]:
         """Fire all pending delays whose fire time ≤ simulated_now + delta.
@@ -229,6 +265,90 @@ class WorkflowTestHarness(Generic[Wf]):
         return fired
 
     # ------------------------------------------------------------------
+    # Event log
+    # ------------------------------------------------------------------
+
+    def emitted(self, event_type: type) -> list[Any]:
+        """Return all events of ``event_type`` emitted since harness creation.
+
+        Events from ``create_new``, ``send_command``, and delay-triggered
+        ``send_command`` calls are all included::
+
+            await harness.send_command("wf-1", ActivateCmd())
+            await harness.advance(hours=6)
+            assert len(harness.emitted(PsyopCheckRequested)) == 1
+        """
+        return [e for e in self._event_log if isinstance(e, event_type)]
+
+    def clear_event_log(self) -> None:
+        """Reset the event log.  Useful when asserting per-cycle counts."""
+        self._event_log.clear()
+
+    # ------------------------------------------------------------------
+    # Adapter helper
+    # ------------------------------------------------------------------
+
+    async def run_handler(
+        self,
+        event: Any,
+        adapter: Adapter,
+        *,
+        workflow_id: str = "test-workflow",
+        event_no: int = 1,
+        checkpoint: dict | None = None,
+        retry_count: int = 0,
+    ) -> list[Any]:
+        """Run an adapter's ``act_on`` and return the commands it yields.
+
+        Wraps ``event`` in a ``ConsumedEvent`` and builds a minimal
+        ``ActionContext`` so adapters can be tested without a database::
+
+            commands = await harness.run_handler(
+                EvPsyopCheckRequested(vault_id="v1"),
+                VaultAdapter(settings),
+                workflow_id="vault:v1",
+            )
+            assert any(isinstance(c, CmdPsyopCheckDone) for c in commands)
+
+        ``CheckpointYield`` and ``ActionTimeout`` yields are silently
+        consumed and do not appear in the returned list.
+
+        Args:
+            event: The inner event object (not a ``ConsumedEvent``).
+            adapter: An already-constructed adapter instance.
+            workflow_id: Workflow ID injected into the ``ActionContext``.
+            event_no: Event number injected into the ``ActionContext``.
+            checkpoint: Optional checkpoint dict (default empty).
+            retry_count: Retry count injected into the ``ActionContext``.
+
+        Returns:
+            List of command objects yielded by the adapter (excludes
+            ``CheckpointYield`` and ``ActionTimeout``).
+        """
+        consumed = ConsumedEvent(
+            workflow_id=workflow_id,
+            event_no=event_no,
+            global_id=0,
+            at=self._simulated_now,
+            workflow_type=self._workflow_type.name(),
+            event_type=getattr(event, "type", type(event).__name__),
+            event=event,
+        )
+        context = ActionContext(
+            workflow_id=workflow_id,
+            event_number=event_no,
+            checkpoint=checkpoint or {},
+            retry_count=retry_count,
+            retry_policy=RetryPolicy(),
+        )
+        commands: list[Any] = []
+        async for item in adapter.act_on(consumed, context):
+            if isinstance(item, (CheckpointYield, ActionTimeout)):
+                continue
+            commands.append(item)
+        return commands
+
+    # ------------------------------------------------------------------
     # Assertions
     # ------------------------------------------------------------------
 
@@ -272,6 +392,11 @@ class WorkflowTestHarness(Generic[Wf]):
     def pending_delays(self) -> list[_PendingDelay]:
         """Read-only view of pending delays."""
         return list(self._pending_delays)
+
+    @property
+    def event_log(self) -> list[Any]:
+        """All events emitted so far, in order."""
+        return list(self._event_log)
 
     # ------------------------------------------------------------------
     # Internal helpers
