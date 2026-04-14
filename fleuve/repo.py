@@ -961,6 +961,55 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         await self._es.put_state(new)
         return new
 
+    async def upsert(
+        self,
+        id: str,
+        cmd: C,
+        tags: list[str] | None = None,
+    ) -> StoredState[S] | Rejection:
+        """Create a new workflow or process a command against an existing one.
+
+        Equivalent to the common pattern::
+
+            result = await repo.create_new(cmd=cmd, id=id)
+            if isinstance(result, AlreadyExists):
+                result, _ = await repo.process_command(id, cmd)
+
+        Returns ``StoredState`` on success, ``Rejection`` on business-logic failure.
+        A ``Rejection`` that is not ``AlreadyExists`` (e.g. validation failure from
+        ``create_new``) is returned directly without falling through to
+        ``process_command``.
+        """
+        result = await self.create_new(cmd=cmd, id=id, tags=tags)
+        if isinstance(result, AlreadyExists):
+            pc = await self.process_command(id, cmd)
+            if isinstance(pc, Rejection):
+                return pc
+            return pc[0]
+        return result
+
+    async def ensure(
+        self,
+        id: str,
+        init_cmd: C,
+        tags: list[str] | None = None,
+    ) -> StoredState[S] | Rejection:
+        """Ensure a workflow exists, creating it if it doesn't.
+
+        If the workflow already exists its state is returned unchanged — the
+        ``init_cmd`` is **not** re-sent.  This is the "start-or-noop" pattern::
+
+            await repo.ensure(workflow_id, init_cmd=CmdActivate(...))
+
+        Returns ``StoredState`` on success, ``Rejection`` if ``create_new``
+        rejects for a reason other than ``AlreadyExists``.
+        """
+        result = await self.create_new(cmd=init_cmd, id=id, tags=tags)
+        if isinstance(result, AlreadyExists):
+            async with self._session_maker() as s:
+                return await self.get_current_state(s, id)
+        return result
+
     async def get_workflow_tags(self, workflow_id: str) -> list[str]:
         """Get tags for a workflow from the metadata table.
 
