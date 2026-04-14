@@ -142,6 +142,42 @@ class EvDelay(EventBase, Generic[C], ABC):
     timezone: str | None = None  # IANA timezone name (e.g. "UTC", "America/New_York")
 
 
+class CmdPeriodicTaskDue(BaseModel):
+    """Framework command delivered when a ``PeriodicTask`` delay fires.
+
+    Add this to your workflow's command union type so that ``decide`` can
+    receive it::
+
+        VaultCommand = Union[CmdActivate, CmdPsyopCheckDone, ..., CmdPeriodicTaskDue]
+
+    In ``decide``, dispatch on ``task_id``::
+
+        if isinstance(cmd, CmdPeriodicTaskDue):
+            if cmd.task_id == "psyop_check":
+                return [EvPsyopCheckRequested(vault_id=state.vault_id)]
+            elif cmd.task_id == "entity_reconcile":
+                return [EvEntityReconcileRequested(vault_id=state.vault_id)]
+    """
+
+    task_id: str
+
+
+class EvPeriodicDelay(EvDelay[CmdPeriodicTaskDue]):
+    """Framework-provided concrete ``EvDelay`` for periodic task scheduling.
+
+    Add this to your workflow's event union so Fleuve can serialize it::
+
+        VaultEvent = Union[EvPsyopCheckRequested, ..., EvPeriodicDelay, EvDelayComplete[VaultCommand]]
+
+    You do **not** need to emit or inspect ``EvPeriodicDelay`` directly — Fleuve
+    generates and schedules it via ``PeriodicTask``.  The ``CmdPeriodicTaskDue``
+    command is what arrives in ``decide`` when a task is due.
+    """
+
+    type: Literal["periodic_delay"] = "periodic_delay"
+    task_id: str  # Which PeriodicTask triggered this delay
+
+
 class EvCancelSchedule(EventBase):
     """Emitted by a workflow to cancel a recurring schedule by id."""
 
@@ -235,6 +271,12 @@ class EvContinueAsNew(EventBase):
 
 
 class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
+    def __init_subclass__(cls, periodic_tasks: list | None = None, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if periodic_tasks:
+            from fleuve.periodic import _inject_periodic_task_methods
+            _inject_periodic_task_methods(cls, periodic_tasks)
+
     @classmethod
     @abstractmethod
     def name(cls) -> str:

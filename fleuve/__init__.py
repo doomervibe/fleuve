@@ -101,6 +101,10 @@ from fleuve.tracing import FleuveTracer
 # Metrics
 from fleuve.metrics import FleuveMetrics
 
+# Periodic tasks
+from fleuve.periodic import PeriodicTask
+from fleuve.model import CmdPeriodicTaskDue, EvPeriodicDelay
+
 # Testing helpers
 from fleuve.testing import WorkflowTestHarness
 
@@ -219,6 +223,10 @@ __all__ = [
     "FleuveTracer",
     # Metrics
     "FleuveMetrics",
+    # Periodic tasks
+    "PeriodicTask",
+    "CmdPeriodicTaskDue",
+    "EvPeriodicDelay",
     # Testing
     "WorkflowTestHarness",
     # Validation
