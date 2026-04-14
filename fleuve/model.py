@@ -1,10 +1,10 @@
 import datetime
 import inspect
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator
-from typing import Any, Callable, Generic, Literal, TypeVar, Union
+from collections.abc import AsyncGenerator, Sequence
+from typing import Any, Callable, Generic, Iterator, Literal, Type, TypeVar, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from fleuve.postgres import RetryPolicy
 from fleuve.stream import ConsumedEvent
@@ -430,14 +430,108 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
         return False
 
 
+M = TypeVar("M", bound=BaseModel)
+
+
+class TypedCheckpoint(dict):
+    """Typed, dict-backed checkpoint accessor.
+
+    ``TypedCheckpoint`` is a plain ``dict`` subclass, so all existing code that
+    reads or writes ``context.checkpoint`` as a dictionary continues to work.
+    The additional methods provide a typed layer on top:
+
+    **Load / save a Pydantic model**::
+
+        class DomainCheckpoint(BaseModel):
+            domain: str
+            pending_urls: list[str]
+            next_index: int = 0
+
+        async def act_on(self, event, context):
+            cp = context.checkpoint.load(DomainCheckpoint)
+            if cp is None:
+                cp = DomainCheckpoint(domain=event.domain, pending_urls=event.urls)
+
+            async for i, url in context.checkpoint.iter(cp.pending_urls, start=cp.next_index):
+                await self._scrape(url)
+                yield context.checkpoint.save(cp.model_copy(update={"next_index": i + 1}))
+
+    **Methods**:
+
+    - ``load(ModelType)`` — deserialize checkpoint dict into a Pydantic model.
+      Returns ``None`` when the checkpoint is empty (i.e. first execution).
+    - ``save(model, save_now=True)`` — serialize model into the checkpoint dict
+      in-place and return a ``CheckpointYield`` ready to be yielded from
+      ``act_on``.  By default persists immediately (``save_now=True``).
+    - ``iter(items, start=0)`` — async generator of ``(index, item)`` tuples
+      starting at ``start``.  Pair with ``save()`` to checkpoint after each item.
+    """
+
+    def load(self, model_type: Type[M]) -> M | None:
+        """Deserialize the checkpoint dict into ``model_type``.
+
+        Returns ``None`` when the checkpoint is empty (first run or cleared).
+        """
+        if not self:
+            return None
+        return model_type.model_validate(dict(self))
+
+    def save(self, model: BaseModel, *, save_now: bool = True) -> "CheckpointYield":
+        """Serialize ``model`` into the checkpoint dict and return a ``CheckpointYield``.
+
+        The returned ``CheckpointYield`` should be yielded from ``act_on`` so
+        the framework can persist it::
+
+            yield context.checkpoint.save(my_model)
+
+        Args:
+            model: Pydantic model to checkpoint.
+            save_now: If True (default), the checkpoint is persisted to the DB
+                immediately.  Set to False to defer persistence until the action
+                completes.
+        """
+        data = model.model_dump()
+        self.clear()
+        self.update(data)
+        return CheckpointYield(data=data, save_now=save_now)
+
+    async def iter(
+        self,
+        items: Sequence,
+        *,
+        start: int = 0,
+    ) -> AsyncGenerator[tuple[int, Any], None]:
+        """Async generator of ``(index, item)`` pairs starting at ``start``.
+
+        Convenience wrapper so handlers can resume mid-list without manually
+        slicing.  Pair with :meth:`save` to checkpoint after each item::
+
+            async for i, url in context.checkpoint.iter(pending_urls, start=cp.next_index):
+                await self._fetch(url)
+                yield context.checkpoint.save(cp.model_copy(update={"next_index": i + 1}))
+        """
+        for i in range(start, len(items)):
+            yield i, items[i]
+
+
 class ActionContext(BaseModel):
     """Context passed to action execution, allowing checkpoint/resume functionality."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     workflow_id: str
     event_number: int
-    checkpoint: dict = Field(default_factory=dict)
+    checkpoint: TypedCheckpoint = Field(default_factory=TypedCheckpoint)
     retry_count: int = 0
     retry_policy: RetryPolicy
+
+    @field_validator("checkpoint", mode="before")
+    @classmethod
+    def _coerce_checkpoint(cls, v: Any) -> TypedCheckpoint:
+        """Wrap plain dicts in TypedCheckpoint transparently."""
+        if isinstance(v, TypedCheckpoint):
+            return v
+        return TypedCheckpoint(v if isinstance(v, dict) else {})
 
 
 class CheckpointYield(BaseModel):
