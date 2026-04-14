@@ -402,14 +402,31 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
         pass
 
     @classmethod
-    @abstractmethod
     def event_to_cmd(cls, e: EE) -> C | None:
-        pass
+        """Convert an external event (or ConsumedEvent wrapper) to a command.
+
+        The default implementation handles the universal ``EvDelayComplete``
+        case: it unwraps the inner event from a ``ConsumedEvent`` if necessary,
+        and returns ``inner.next_cmd`` for any ``EvDelayComplete``.  This means
+        workflows that *only* use delays do not need to override this method.
+
+        Override when the workflow reacts to external subscriptions or needs
+        custom routing logic beyond delay completion.
+        """
+        # Unwrap ConsumedEvent (runner passes ConsumedEvent; testing passes inner event)
+        inner: Any = getattr(e, "event", e)
+        if isinstance(inner, EvDelayComplete):
+            return inner.next_cmd  # type: ignore[return-value]
+        return None
 
     @staticmethod
-    @abstractmethod
     def is_final_event(e: E) -> bool:
-        pass
+        """Return True if ``e`` terminates the workflow.  Default returns False.
+
+        Override only when the workflow has a terminal event that should stop
+        further processing.
+        """
+        return False
 
 
 class ActionContext(BaseModel):
