@@ -1,7 +1,8 @@
 import datetime
+import inspect
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
-from typing import Any, Generic, Literal, TypeVar, Union
+from typing import Any, Callable, Generic, Literal, TypeVar, Union
 
 from pydantic import BaseModel, Field
 
@@ -476,7 +477,108 @@ class ActionTimeout(BaseModel):
 Wf = TypeVar("Wf", bound=Workflow)
 
 
+def handles(*event_types: type) -> Callable:
+    """Decorator that registers an Adapter method as the handler for one or more event types.
+
+    When at least one method in an ``Adapter`` subclass is decorated with
+    ``@handles``, Fleuve automatically generates ``act_on`` and
+    ``to_be_act_on`` — no need to write them manually.
+
+    The decorated method receives the **inner** event (already unwrapped from
+    ``ConsumedEvent``), typed to the declared event class::
+
+        class VaultAdapter(Adapter[VaultEvent, VaultCommand]):
+
+            @handles(EvPsyopCheckRequested)
+            async def _psyop_check(
+                self, ev: EvPsyopCheckRequested, context: ActionContext | None
+            ) -> AsyncGenerator[VaultCommand, None]:
+                result = await self._client.check(ev.vault_id)
+                yield CmdPsyopCheckDone(vault_id=ev.vault_id, alerts=result)
+
+            @handles(EvEntityReconcileRequested)
+            async def _entity_reconcile(self, ev, context):
+                ...
+                yield CmdEntityReconcileDone(vault_id=ev.vault_id)
+
+    Rules:
+    - Handlers must be **async generators** (they ``yield`` commands /
+      ``CheckpointYield`` / ``ActionTimeout`` values, just like ``act_on``).
+    - A handler that yields nothing is fine — just ``return`` without
+      yielding anything.
+    - You can still override ``act_on`` and/or ``to_be_act_on`` manually
+      alongside ``@handles`` methods; the generated versions are only injected
+      when those methods are absent from the subclass's own ``__dict__``.
+    """
+
+    def decorator(fn: Callable) -> Callable:
+        fn._handles_event_types = event_types  # type: ignore[attr-defined]
+        return fn
+
+    return decorator
+
+
 class Adapter(Generic[E, C], ABC):
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+
+        # Collect every @handles-decorated method visible on this class
+        # (includes methods inherited from adapter base classes).
+        handled: dict[type, Any] = {}
+        for attr_name in dir(cls):
+            try:
+                method = getattr(cls, attr_name)
+            except AttributeError:
+                continue
+            event_types = getattr(method, "_handles_event_types", None)
+            if event_types:
+                for et in event_types:
+                    handled[et] = method
+
+        if not handled:
+            return  # Traditional manual act_on / to_be_act_on — nothing to do.
+
+        # Snapshot so the closures below capture stable references.
+        _handled_snapshot = dict(handled)
+        _event_types_tuple = tuple(handled.keys())
+
+        provided: set[str] = set()
+
+        if "act_on" not in cls.__dict__:
+            # Generate an act_on that unwraps ConsumedEvent and dispatches by type.
+            async def _generated_act_on(
+                self: Any,
+                event: Any,
+                context: Any = None,
+            ) -> AsyncGenerator:
+                inner: Any = getattr(event, "event", event)
+                for event_type, handler in _handled_snapshot.items():
+                    if isinstance(inner, event_type):
+                        async for item in handler(self, inner, context):
+                            yield item
+                        return
+
+            _generated_act_on.__name__ = "act_on"
+            cls.act_on = _generated_act_on  # type: ignore[method-assign]
+            provided.add("act_on")
+
+        if "to_be_act_on" not in cls.__dict__:
+
+            def _generated_to_be_act_on(self: Any, event: Any) -> bool:
+                inner: Any = getattr(event, "event", event)
+                return isinstance(inner, _event_types_tuple)
+
+            _generated_to_be_act_on.__name__ = "to_be_act_on"
+            cls.to_be_act_on = _generated_to_be_act_on  # type: ignore[method-assign]
+            provided.add("to_be_act_on")
+
+        # Remove the provided methods from __abstractmethods__ so that
+        # subclasses using @handles are not considered abstract.
+        if provided and hasattr(cls, "__abstractmethods__"):
+            cls.__abstractmethods__ = frozenset(
+                cls.__abstractmethods__ - provided
+            )
+
     @abstractmethod
     async def act_on(
         self, event: ConsumedEvent[E], context: "ActionContext | None" = None
@@ -495,12 +597,20 @@ class Adapter(Generic[E, C], ABC):
               immediately, else persist at end of action.
             - ActionTimeout: apply asyncio.wait_for to the remainder of the action;
               if the rest does not complete within the given seconds, TimeoutError is raised.
+
+        Note: When using the ``@handles`` decorator on methods, this method is
+        generated automatically and does not need to be implemented.
         """
         if False:
             yield  # make this an async generator; subclasses override and yield commands/checkpoints
 
     @abstractmethod
     def to_be_act_on(self, event: Any) -> bool:
+        """Return True if this adapter should handle the given event.
+
+        Note: When using the ``@handles`` decorator on methods, this method is
+        generated automatically and does not need to be implemented.
+        """
         pass
 
     async def sync_db(
