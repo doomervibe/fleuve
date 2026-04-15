@@ -36,6 +36,7 @@ nav:
   - Quick start: quick-start.md
   - Core concepts: concepts.md
   - Guides:
+      - Testing workflows: testing.md
       - Partitioning & scaling: scaling.md
       - Production deployment: deployment.md
   - Reference:

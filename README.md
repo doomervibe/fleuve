@@ -217,6 +217,42 @@ See the [Step-by-Step Tutorial](#step-by-step-tutorial) for a complete working e
 - **Replay endpoint**: POST to replay events and get resulting state
 - **Simulate (what-if)**: Apply hypothetical commands without persisting; useful for validation
 
+### Periodic Tasks
+- **`PeriodicTask` primitive**: Declare recurring tasks directly on the `Workflow` class — no delay-id constants, no manual rescheduling branches
+- **Jitter & stagger**: Spread initial runs across `jitter` window to avoid thundering-herd on mass activation
+- **Enable/disable**: Set `interval=timedelta(0)` to disable a task; scheduling and rescheduling calls become no-ops
+
+### Typed Handler Decorators (`@handles`)
+- **`@handles(EventType, ...)`**: Decorate adapter methods with the event types they handle
+- **Auto-wired routing**: Framework generates `act_on` and `to_be_act_on` automatically — no hand-maintained dispatch dict
+- **Inner-event delivery**: Handlers receive the unwrapped domain event, already typed
+
+### Typed Checkpoint
+- **`TypedCheckpoint`**: Pydantic-native checkpoint API on `context.checkpoint`
+- **`load(Model)`** / **`save(model)`**: Replace raw `dict` access with typed model load/save
+- **`iter(items, start=n)`**: Resumable list iteration that auto-checkpoints position after each item
+
+### In-Memory Test Harness
+- **`WorkflowTestHarness`**: Full decide→evolve cycle with no database or NATS
+- **`advance(hours=, minutes=, seconds=)`**: Tick the delay clock to fire pending `EvDelay` events
+- **`emitted(EventType)`**: Assert on events produced across the full test run
+- **`run_handler(event, adapter)`**: Test adapter side effects in isolation
+- **`simulate(workflow_id, cmd)`**: What-if command application without mutating harness state
+
+### Multi-Workflow Registry (`FleuveApp`)
+- **`FleuveApp`**: Register multiple workflow types against shared infrastructure (one engine, one NATS connection)
+- **`app.runners(names)`**: Context manager that creates and tears down `WorkflowsRunner` instances together
+- **`app.readonly_repos(names)`**: Lightweight repos for API servers that only read state or send commands
+
+### Ergonomic Repository Helpers
+- **`repo.upsert(id, cmd)`**: Create-or-update in one call — no more three-line `AlreadyExists` triangle
+- **`repo.ensure(id, init_cmd)`**: Ensure a workflow exists without re-processing the init command if it already does
+
+### Structured Handler Logging (`context.logger`)
+- **`context.logger`**: `ContextLogger` bound to `workflow_id`, `event_number`, and `retry_count`
+- **Keyword arguments**: `context.logger.info("done", alerts=3)` — kwargs become log record `extra` fields
+- **Zero config**: Works with any stdlib-compatible log handler or formatter
+
 ## Installation
 
 ### Requirements
@@ -642,6 +678,228 @@ result = await repo.process_command(
 
 # Get current state
 state = await repo.get_current_state(session, "order-123")
+```
+
+**Upsert and Ensure helpers:**
+
+```python
+# Create-or-update: create_new if new, process_command if exists
+result = await repo.upsert("order-123", CmdPlaceOrder(...))
+
+# Idempotent bootstrap: create if missing, no-op if already exists
+result = await repo.ensure("order-123", init_cmd=CmdPlaceOrder(...))
+```
+
+### 7. Typed Handler Decorators (`@handles`)
+
+Instead of manually implementing `act_on` with a dispatch dict and `to_be_act_on` with `getattr`
+unwrapping, use the `@handles` decorator.  The framework generates both methods automatically.
+
+```python
+from fleuve import Adapter, handles, ActionContext
+
+class OrderAdapter(Adapter[OrderEvent, OrderCommand]):
+
+    @handles(EvOrderPlaced)
+    async def _on_placed(self, ev: EvOrderPlaced, context: ActionContext):
+        await self.email_service.send_confirmation(ev.customer_id)
+        yield CmdMarkNotified(order_id=ev.order_id)
+
+    @handles(EvOrderShipped)
+    async def _on_shipped(self, ev: EvOrderShipped, context: ActionContext):
+        await self.email_service.send_tracking(ev.customer_id, ev.tracking_number)
+        if False:
+            yield  # satisfy the async-generator requirement for no-yield handlers
+```
+
+- `act_on` and `to_be_act_on` are generated from the `@handles` registry.
+- Each handler receives the **inner domain event** (already unwrapped from `ConsumedEvent`), typed.
+- Multiple event types can share one handler: `@handles(EvA, EvB)`.
+
+### 8. TypedCheckpoint
+
+`context.checkpoint` is a `TypedCheckpoint` — a `dict` subclass with a Pydantic-native API for
+structured checkpoint data.  It replaces raw string-keyed dicts and manual JSON in handlers.
+
+```python
+from fleuve import TypedCheckpoint
+from pydantic import BaseModel
+
+class ScrapeCheckpoint(BaseModel):
+    pending_urls: list[str]
+    next_index: int = 0
+
+@handles(EvScrapeRequested)
+async def _scrape(self, ev: EvScrapeRequested, context: ActionContext):
+    cp = context.checkpoint.load(ScrapeCheckpoint) or ScrapeCheckpoint(
+        pending_urls=ev.urls
+    )
+    async for i, url in context.checkpoint.iter(cp.pending_urls, start=cp.next_index):
+        await self._fetch(url)
+        yield context.checkpoint.save(cp.model_copy(update={"next_index": i + 1}))
+```
+
+`iter(items, start=n)` yields `(index, item)` pairs and auto-saves position on each iteration,
+so a crash mid-list resumes from the last saved index.
+
+### 9. PeriodicTask
+
+Declare recurring tasks directly on the `Workflow` class — no per-task delay-id constants,
+`EvXDelay` subclasses, or manual rescheduling branches.
+
+```python
+from fleuve import Workflow, PeriodicTask
+from datetime import timedelta
+
+class VaultWorkflow(Workflow[...], periodic_tasks=[
+    PeriodicTask(id="psyop_check",      interval=timedelta(hours=6),
+                 first_run_after=timedelta(minutes=1)),
+    PeriodicTask(id="entity_reconcile", interval=timedelta(hours=12)),
+    PeriodicTask(id="context_brief",    interval=timedelta(hours=24),
+                 jitter=timedelta(minutes=10)),
+]):
+    ...
+```
+
+Add `EvPeriodicDelay` and `CmdPeriodicTaskDue` to your event/command unions, then use the
+injected class-methods in `decide`:
+
+```python
+@staticmethod
+def decide(state, cmd):
+    if isinstance(cmd, CmdActivate):
+        # Schedule all periodic tasks on activation
+        return [EvActivated(), *VaultWorkflow.schedule_periodic_tasks(state)]
+
+    if isinstance(cmd, CmdPeriodicTaskDue):
+        match cmd.task_id:
+            case "psyop_check":
+                return [EvPsyopCheckRequested(vault_id=state.vault_id),
+                        *VaultWorkflow.reschedule_periodic_task("psyop_check")]
+            case "entity_reconcile":
+                return [EvEntityReconcileRequested(vault_id=state.vault_id),
+                        *VaultWorkflow.reschedule_periodic_task("entity_reconcile")]
+```
+
+Generated classmethods:
+- `schedule_periodic_tasks(state=None)` — returns `EvPeriodicDelay` events for all enabled,
+  unscheduled tasks (pass `state` to skip already-scheduled ones).
+- `reschedule_periodic_task(task_id)` — re-arms the named task; returns `[]` when disabled.
+- `get_periodic_task(task_id)` — returns the `PeriodicTask` spec.
+
+Set `interval=timedelta(0)` to disable a task; scheduling calls become no-ops.
+
+### 10. In-Memory Test Harness
+
+`WorkflowTestHarness` drives full decide→evolve cycles in memory with no database or NATS.
+
+```python
+from fleuve.testing import WorkflowTestHarness
+
+harness = WorkflowTestHarness(VaultWorkflow)
+
+# Create and send commands
+ss, events = await harness.create_new("vault-1", CmdActivate(vault_id="v1"))
+assert ss.state.lifecycle == "active"
+
+# Advance simulated time — fires pending EvDelay events
+await harness.advance(hours=1)
+assert len(harness.emitted(EvPsyopCheckRequested)) == 1
+
+# Inspect state
+state = harness.get_state("vault-1").state
+
+# Test adapter side-effects without DB/NATS
+from fleuve.testing import WorkflowTestHarness
+commands = await harness.run_handler(
+    EvPsyopCheckRequested(vault_id="v1"),
+    VaultAdapter(settings),
+    workflow_id="vault-1",
+)
+assert any(isinstance(c, CmdPsyopCheckDone) for c in commands)
+
+# What-if simulation (does not mutate harness state)
+result = harness.simulate("vault-1", CmdDisable())
+```
+
+| Method | Description |
+|--------|-------------|
+| `create_new(id, cmd)` | Create a new workflow instance |
+| `send_command(id, cmd)` | Process a command against an existing workflow |
+| `advance(hours=, minutes=, seconds=)` | Fire pending delays within the given offset |
+| `emitted(EventType)` | All events of that type emitted since harness creation |
+| `run_handler(event, adapter)` | Run adapter `act_on` and return yielded commands |
+| `simulate(id, cmd)` | What-if command without mutating harness state |
+| `get_state(id)` | Retrieve current `StoredState` |
+| `assert_subscriptions(id, expected)` | Assert expected `Sub` list |
+| `clear_event_log()` | Reset event log between assertion phases |
+
+### 11. Multi-Workflow Registry (`FleuveApp`)
+
+When running several workflow types, `FleuveApp` provides a single registry that shares one
+database engine and one NATS connection across all workflows.
+
+```python
+from fleuve.app import FleuveApp
+
+app = FleuveApp(
+    database_url="postgresql+asyncpg://user:pass@localhost/mydb",
+    nats_url="nats://localhost:4222",
+)
+
+app.register(
+    name="domain",
+    workflow=DomainWorkflow,
+    adapter=DomainAdapter(settings),
+    state=DomainState,
+    db_event_model=DomainEvent,
+    db_sub_model=DomainSub,
+    db_activity_model=DomainActivity,
+    db_delay_schedule_model=DomainDelay,
+    db_offset_model=DomainOffset,
+)
+app.register("vault", VaultWorkflow, VaultAdapter(settings), VaultState, ...)
+
+# Start all runners with shared infra
+async with app.runners() as runners:
+    await asyncio.gather(*(r.run() for r in runners.values()))
+
+# Start a subset
+async with app.runners(["domain"]) as runners: ...
+
+# Read-only repos for API servers (no NATS / runner required)
+async with app.readonly_repos(["domain", "vault"]) as repos:
+    state = await repos["domain"].get_current_state(session, workflow_id)
+```
+
+### 12. `context.logger` — Structured Handler Logging
+
+`ActionContext.logger` returns a `ContextLogger` with `workflow_id`, `event_number`, and
+`retry_count` automatically bound to every log record.  No manual field interpolation needed.
+
+```python
+@handles(EvPsyopCheckRequested)
+async def _psyop_check(self, ev: EvPsyopCheckRequested, context: ActionContext):
+    result = await self.run_check(ev.vault_id)
+    context.logger.info("psyop check complete", alerts=len(result.alerts))
+    # extra: {workflow_id: "vault:v1", event_number: 7, retry_count: 0, alerts: 3}
+    yield CmdPsyopCheckDone(vault_id=ev.vault_id, alerts=result.alerts)
+```
+
+The underlying logger is `"fleuve.handler"`.  Configure it like any standard `logging.Logger`.
+Supports `.debug()`, `.info()`, `.warning()`, `.error()`, `.exception()`, all accepting
+arbitrary keyword arguments that become log record `extra` fields.
+
+### 13. `StateBase.apply()` — Concise State Transitions
+
+`apply(**kwargs)` is a shorthand for `model_copy(update={...})`:
+
+```python
+# Before:
+return state.model_copy(update={"last_checked_at": now, "count": state.count + 1})
+
+# After:
+return state.apply(last_checked_at=now, count=state.count + 1)
 ```
 
 ## Usage Examples
