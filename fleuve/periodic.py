@@ -117,7 +117,9 @@ class PeriodicTask:
         self, now: datetime.datetime | None = None
     ) -> datetime.datetime:
         """Compute ``delay_until`` for the very first run."""
-        base = (now or datetime.datetime.now(datetime.timezone.utc)) + self.first_run_after
+        base = (
+            now or datetime.datetime.now(datetime.timezone.utc)
+        ) + self.first_run_after
         return self._apply_jitter(base)
 
     def next_delay_until(
@@ -134,9 +136,7 @@ class PeriodicTask:
         return base
 
 
-def _inject_periodic_task_methods(
-    cls: Any, tasks: list[PeriodicTask]
-) -> None:
+def _inject_periodic_task_methods(cls: Any, tasks: list[PeriodicTask]) -> None:
     """Inject schedule_periodic_tasks, reschedule_periodic_task, get_periodic_task
     as classmethods on ``cls``."""
 
@@ -145,9 +145,7 @@ def _inject_periodic_task_methods(
     task_map: dict[str, PeriodicTask] = {t.id: t for t in tasks}
 
     @classmethod  # type: ignore[misc]
-    def schedule_periodic_tasks(
-        klass: Any, state: Any = None
-    ) -> list[EvPeriodicDelay]:
+    def schedule_periodic_tasks(klass: Any, state: Any = None) -> list[EvPeriodicDelay]:
         """Return ``EvPeriodicDelay`` events that should be emitted to schedule
         all enabled periodic tasks.
 
@@ -168,13 +166,10 @@ def _inject_periodic_task_methods(
         """
         already_scheduled: set[str] = set()
         if state is not None:
-            already_scheduled = {
-                s.id for s in getattr(state, "schedules", [])
-            }
+            already_scheduled = {s.id for s in getattr(state, "schedules", [])}
             # Also check the delay_id format used by EvPeriodicDelay
             already_scheduled |= {
-                f"periodic_{t_id}" for t_id in already_scheduled
-                if t_id in task_map
+                f"periodic_{t_id}" for t_id in already_scheduled if t_id in task_map
             }
 
         result: list[EvPeriodicDelay] = []
@@ -195,9 +190,7 @@ def _inject_periodic_task_methods(
         return result
 
     @classmethod  # type: ignore[misc]
-    def reschedule_periodic_task(
-        klass: Any, task_id: str
-    ) -> list[EvPeriodicDelay]:
+    def reschedule_periodic_task(klass: Any, task_id: str) -> list[EvPeriodicDelay]:
         """Return an ``EvPeriodicDelay`` event that re-arms the named task.
 
         Call this from ``decide`` in the completion-command branch::

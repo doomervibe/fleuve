@@ -982,7 +982,9 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         """
         result = await self.create_new(cmd=cmd, id=id, tags=tags)
         if isinstance(result, AlreadyExists):
-            pc = await self.process_command(id, cmd)
+            pc: tuple[StoredState[S], list[E]] | Rejection = await self.process_command(
+                id, cmd
+            )
             if isinstance(pc, Rejection):
                 return pc
             return pc[0]

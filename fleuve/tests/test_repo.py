@@ -23,7 +23,6 @@ from fleuve.repo import (
     WorkflowNotFound,
 )
 
-
 # Use test models from conftest
 from fleuve.tests.conftest import (
     ScheduleCronWorkflow,

@@ -22,7 +22,6 @@ from fleuve.model import EventBase, StateBase
 from fleuve.repo import InProcessEuphemeralStorage, StoredState
 from fleuve.stream import ConsumedEvent
 
-
 # ---------------------------------------------------------------------------
 # Heavyweight models that make deserialization cost noticeable
 # ---------------------------------------------------------------------------

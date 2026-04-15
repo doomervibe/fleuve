@@ -15,6 +15,7 @@ from fleuve.model import (
     Adapter,
     CheckpointYield,
     RetryPolicy,
+    TypedCheckpoint,
 )
 from fleuve.postgres import Activity, StoredEvent
 from fleuve.repo import AsyncRepo
@@ -344,7 +345,9 @@ class ActionExecutor(Generic[C, Ae]):
                 context = ActionContext(
                     workflow_id=workflow_id,
                     event_number=event_number,
-                    checkpoint=activity.checkpoint.copy(),  # Copy to allow mutation
+                    checkpoint=TypedCheckpoint(
+                        activity.checkpoint
+                    ),  # Copy to allow mutation
                     retry_count=retry_count,
                     retry_policy=activity.retry_policy.model_copy(),
                 )
@@ -585,9 +588,9 @@ class ActionExecutor(Generic[C, Ae]):
         Validates to_be_act_on before re-firing; marks FAILED when no handler is
         registered (Fix 4).
         """
-        threshold = datetime.datetime.now(
-            datetime.timezone.utc
-        ) - self._recovery_stale_after
+        threshold = (
+            datetime.datetime.now(datetime.timezone.utc) - self._recovery_stale_after
+        )
 
         stale_running_or_retrying = and_(
             self._db_activity_model.status.in_(
@@ -675,8 +678,7 @@ class ActionExecutor(Generic[C, Ae]):
                     await s.execute(
                         update(self._db_activity_model)
                         .where(
-                            self._db_activity_model.workflow_id
-                            == activity.workflow_id
+                            self._db_activity_model.workflow_id == activity.workflow_id
                         )
                         .where(
                             self._db_activity_model.event_number
@@ -879,8 +881,10 @@ class ActionExecutor(Generic[C, Ae]):
         )
         await s.commit()
         updated = (res.rowcount or 0) > 0
-        if updated and self._metrics is not None and hasattr(
-            self._metrics, "record_failed_action"
+        if (
+            updated
+            and self._metrics is not None
+            and hasattr(self._metrics, "record_failed_action")
         ):
             self._metrics.record_failed_action(error_type)
         return updated

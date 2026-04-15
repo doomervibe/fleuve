@@ -271,10 +271,13 @@ class EvContinueAsNew(EventBase):
 
 
 class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
-    def __init_subclass__(cls, periodic_tasks: list | None = None, **kwargs: Any) -> None:
+    def __init_subclass__(
+        cls, periodic_tasks: list | None = None, **kwargs: Any
+    ) -> None:
         super().__init_subclass__(**kwargs)
         if periodic_tasks:
             from fleuve.periodic import _inject_periodic_task_methods
+
             _inject_periodic_task_methods(cls, periodic_tasks)
 
     @classmethod
@@ -459,7 +462,7 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
         # Unwrap ConsumedEvent (runner passes ConsumedEvent; testing passes inner event)
         inner: Any = getattr(e, "event", e)
         if isinstance(inner, EvDelayComplete):
-            return inner.next_cmd  # type: ignore[return-value]
+            return inner.next_cmd  # type: ignore[return-value,no-any-return]
         return None
 
     @staticmethod
@@ -711,9 +714,7 @@ class Adapter(Generic[E, C], ABC):
         # Remove the provided methods from __abstractmethods__ so that
         # subclasses using @handles are not considered abstract.
         if provided and hasattr(cls, "__abstractmethods__"):
-            cls.__abstractmethods__ = frozenset(
-                cls.__abstractmethods__ - provided
-            )
+            cls.__abstractmethods__ = frozenset(cls.__abstractmethods__ - provided)
 
     @abstractmethod
     async def act_on(

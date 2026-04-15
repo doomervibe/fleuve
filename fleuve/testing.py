@@ -48,6 +48,7 @@ from fleuve.model import (
     Rejection,
     StateBase,
     Sub,
+    TypedCheckpoint,
     Workflow,
 )
 from fleuve.postgres import RetryPolicy
@@ -325,7 +326,7 @@ class WorkflowTestHarness(Generic[Wf]):
             List of command objects yielded by the adapter (excludes
             ``CheckpointYield`` and ``ActionTimeout``).
         """
-        consumed = ConsumedEvent(
+        consumed: ConsumedEvent = ConsumedEvent(
             workflow_id=workflow_id,
             event_no=event_no,
             global_id=0,
@@ -337,7 +338,7 @@ class WorkflowTestHarness(Generic[Wf]):
         context = ActionContext(
             workflow_id=workflow_id,
             event_number=event_no,
-            checkpoint=checkpoint or {},
+            checkpoint=TypedCheckpoint(checkpoint or {}),
             retry_count=retry_count,
             retry_policy=RetryPolicy(),
         )

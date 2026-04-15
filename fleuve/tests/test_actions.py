@@ -1729,7 +1729,9 @@ class TestCompletionInvariant:
             assert activity.status == ActionStatus.FAILED
             assert "no handler" in (activity.error_message or "").lower()
 
-        assert fire_count == 0, "execute_action must not be called when handler is missing"
+        assert (
+            fire_count == 0
+        ), "execute_action must not be called when handler is missing"
 
     @pytest.mark.asyncio
     async def test_recovery_ignores_other_workflow_types(
@@ -1820,9 +1822,9 @@ class TestCompletionInvariant:
         await executor._recover_interrupted_actions()
         await self._wait_for_executor(executor)
 
-        assert fire_count == 1, (
-            f"Expected exactly 1 fire (own workflow type only), got {fire_count}"
-        )
+        assert (
+            fire_count == 1
+        ), f"Expected exactly 1 fire (own workflow type only), got {fire_count}"
 
         # Verify the other-type activity was NOT touched (still RUNNING, not failed)
         from sqlalchemy import select as sa_select
@@ -1834,9 +1836,9 @@ class TestCompletionInvariant:
                 .where(test_activity_model.event_number == 1)
             )
             assert other_activity is not None
-            assert other_activity.status == ActionStatus.RUNNING, (
-                "Activity of another workflow type must not be touched by this runner"
-            )
+            assert (
+                other_activity.status == ActionStatus.RUNNING
+            ), "Activity of another workflow type must not be touched by this runner"
 
     @pytest.mark.asyncio
     async def test_long_running_attempt_not_recovered_while_checkpointing(
