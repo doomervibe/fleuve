@@ -830,7 +830,7 @@ class ActionExecutor(Generic[C, Ae]):
             .values(**values)
         )
         await s.commit()
-        return (res.rowcount or 0) > 0
+        return (res.rowcount or 0) > 0  # type: ignore[attr-defined]
 
     async def _save_checkpoint(
         self, s: AsyncSession, workflow_id: str, event_number: int, checkpoint: dict
@@ -894,7 +894,7 @@ class ActionExecutor(Generic[C, Ae]):
             )
         )
         await s.commit()
-        updated = (res.rowcount or 0) > 0
+        updated = (res.rowcount or 0) > 0  # type: ignore[attr-defined]
         if (
             updated
             and self._metrics is not None
