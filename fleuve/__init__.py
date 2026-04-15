@@ -14,6 +14,7 @@ from fleuve.model import (
     ActionTimeout,
     Adapter,
     CheckpointYield,
+    ContextLogger,
     TypedCheckpoint,
     EventBase,
     handles,
@@ -126,6 +127,9 @@ from fleuve.scaling import (
 # Simplified setup
 from fleuve.setup import create_workflow_runner, WorkflowRunnerResources
 
+# Multi-workflow registry
+from fleuve.app import FleuveApp, WorkflowRegistration
+
 # Truncation
 from fleuve.truncation import TruncationService
 
@@ -149,6 +153,7 @@ __all__ = [
     "ActionTimeout",
     "Adapter",
     "handles",
+    "ContextLogger",
     "EventBase",
     "StateBase",
     "Workflow",
@@ -243,6 +248,8 @@ __all__ = [
     # Setup
     "create_workflow_runner",
     "WorkflowRunnerResources",
+    "FleuveApp",
+    "WorkflowRegistration",
     # Truncation
     "TruncationService",
     # External messaging

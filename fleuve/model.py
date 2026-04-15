@@ -1,10 +1,11 @@
 import datetime
 import inspect
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Sequence
 from typing import Any, Callable, Generic, Iterator, Literal, Type, TypeVar, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from fleuve.postgres import RetryPolicy
 from fleuve.stream import ConsumedEvent
@@ -98,6 +99,18 @@ class StateBase(BaseModel):
     external_subscriptions: list["ExternalSub"] = Field(default_factory=list)
     lifecycle: Literal["active", "paused", "cancelled"] = "active"
     schedules: list[Schedule] = Field(default_factory=list)
+
+    def apply(self, **kwargs: Any) -> "StateBase":
+        """Return a copy of this state with the given fields updated.
+
+        Shorthand for ``state.model_copy(update={...})``::
+
+            # Instead of:
+            return state.model_copy(update={"last_checked_at": now, "count": state.count + 1})
+            # Write:
+            return state.apply(last_checked_at=now, count=state.count + 1)
+        """
+        return self.model_copy(update=kwargs)
 
 
 # Define type variables for generic typing
@@ -559,6 +572,54 @@ class TypedCheckpoint(dict):
             yield i, items[i]
 
 
+class ContextLogger:
+    """Structured logger bound to an action's ``ActionContext`` fields.
+
+    Every log call automatically includes ``workflow_id``, ``event_number``,
+    and ``retry_count`` in the record's ``extra`` dict so log formatters /
+    handlers (e.g. structlog, python-json-logger) can surface them without
+    manual interpolation in every handler::
+
+        context.logger.info("psyop done", alerts=len(alerts))
+        # extra = {"workflow_id": "vault:v1", "event_number": 7, "retry_count": 0, "alerts": 3}
+
+    The underlying Python logger is ``"fleuve.handler"``; configure it as you
+    would any standard ``logging.Logger``.
+    """
+
+    def __init__(
+        self,
+        workflow_id: str,
+        event_number: int,
+        retry_count: int,
+        name: str = "fleuve.handler",
+    ) -> None:
+        self._base = logging.getLogger(name)
+        self._extra: dict[str, Any] = {
+            "workflow_id": workflow_id,
+            "event_number": event_number,
+            "retry_count": retry_count,
+        }
+
+    def _log(self, level: int, msg: str, **kwargs: Any) -> None:
+        self._base.log(level, msg, extra={**self._extra, **kwargs})
+
+    def debug(self, msg: str, **kwargs: Any) -> None:
+        self._log(logging.DEBUG, msg, **kwargs)
+
+    def info(self, msg: str, **kwargs: Any) -> None:
+        self._log(logging.INFO, msg, **kwargs)
+
+    def warning(self, msg: str, **kwargs: Any) -> None:
+        self._log(logging.WARNING, msg, **kwargs)
+
+    def error(self, msg: str, **kwargs: Any) -> None:
+        self._log(logging.ERROR, msg, **kwargs)
+
+    def exception(self, msg: str, **kwargs: Any) -> None:
+        self._base.exception(msg, extra={**self._extra, **kwargs})
+
+
 class ActionContext(BaseModel):
     """Context passed to action execution, allowing checkpoint/resume functionality."""
 
@@ -570,6 +631,8 @@ class ActionContext(BaseModel):
     retry_count: int = 0
     retry_policy: RetryPolicy
 
+    _logger: ContextLogger | None = PrivateAttr(default=None)
+
     @field_validator("checkpoint", mode="before")
     @classmethod
     def _coerce_checkpoint(cls, v: Any) -> TypedCheckpoint:
@@ -577,6 +640,23 @@ class ActionContext(BaseModel):
         if isinstance(v, TypedCheckpoint):
             return v
         return TypedCheckpoint(v if isinstance(v, dict) else {})
+
+    @property
+    def logger(self) -> ContextLogger:
+        """Structured logger bound to this action's context fields.
+
+        Automatically includes ``workflow_id``, ``event_number``, and
+        ``retry_count`` in every log record::
+
+            context.logger.info("check done", alerts=len(alerts))
+        """
+        if self._logger is None:
+            self._logger = ContextLogger(
+                workflow_id=self.workflow_id,
+                event_number=self.event_number,
+                retry_count=self.retry_count,
+            )
+        return self._logger
 
 
 class CheckpointYield(BaseModel):
