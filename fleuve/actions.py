@@ -695,6 +695,19 @@ class ActionExecutor(Generic[C, Ae]):
 
                 events_to_fire.append(event)
 
+            # Claim all recovered activities by bumping last_attempt_at before
+            # releasing the FOR UPDATE lock.  This prevents a concurrent recovery
+            # scan (running with its own connection) from treating the same rows as
+            # stale and double-firing them after our commit releases the lock.
+            now = datetime.datetime.now(datetime.timezone.utc)
+            for event in events_to_fire:
+                await s.execute(
+                    update(self._db_activity_model)
+                    .where(self._db_activity_model.workflow_id == event.workflow_id)
+                    .where(self._db_activity_model.event_number == event.event_no)
+                    .values(last_attempt_at=now)
+                )
+
             # Commit releases the FOR UPDATE row locks
             await s.commit()
 
@@ -729,6 +742,7 @@ class ActionExecutor(Generic[C, Ae]):
             event_number=event.event_no,
             status=ActionStatus.PENDING,
             max_retries=self._max_retries,
+            retry_policy=RetryPolicy(max_retries=self._max_retries),
             started_at=datetime.datetime.now(datetime.timezone.utc),
             runner_id=getattr(event, "reader_name", None),
         )
