@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import inspect
 import logging
@@ -847,3 +848,35 @@ class Adapter(Generic[E, C], ABC):
         Default implementation does nothing.
         """
         pass
+
+    async def bulk_sync_db(
+        self,
+        session: Any,
+        updates: "list[BulkUpdate]",
+    ) -> None:
+        """
+        Bulk variant of ``sync_db`` for fan-out commands applied to many
+        workflows at once (see ``AsyncRepo.bulk_process_command``).
+
+        Default implementation calls ``sync_db`` per update — correct but
+        defeats the bulk speedup. Subclasses that maintain a projection
+        table should override with a single bulk INSERT/UPSERT/DELETE.
+        """
+        for u in updates:
+            await self.sync_db(
+                session, u.workflow_id, u.old_state, u.new_state, u.events
+            )
+
+
+@dataclasses.dataclass(frozen=True)
+class BulkUpdate:
+    """One workflow's slice of a bulk command application.
+
+    Passed in a list to ``Adapter.bulk_sync_db`` so the adapter can build
+    a single bulk SQL statement covering many workflows.
+    """
+
+    workflow_id: str
+    old_state: Any  # StateBase | None — pre-command state
+    new_state: Any  # StateBase | None — post-evolve state (None if cancelled+gone)
+    events: list[Any]  # produced events

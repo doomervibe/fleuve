@@ -2,15 +2,18 @@
 Unit tests for fleuve.model module.
 """
 
+import dataclasses
 import datetime
 from abc import ABC
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel, ValidationError
 
 from fleuve.model import (
     ActionContext,
+    Adapter,
+    BulkUpdate,
     EventBase,
     EvCancelSchedule,
     EvDelay,
@@ -389,3 +392,115 @@ class TestHybridScheduleEvolve:
         assert new_state is not None
         assert new_state.lifecycle == "cancelled"
         assert len(new_state.schedules) == 0
+
+
+# ── BulkUpdate / Adapter.bulk_sync_db ──────────────────────────────────────
+
+
+class TestBulkUpdate:
+    def test_bulk_update_is_frozen_dataclass(self):
+        u = BulkUpdate(workflow_id="wf-1", old_state=None, new_state="x", events=[])
+        assert dataclasses.is_dataclass(u)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            u.workflow_id = "wf-2"  # type: ignore[misc]
+
+    def test_bulk_update_holds_all_fields(self):
+        u = BulkUpdate(
+            workflow_id="wf-1",
+            old_state={"v": 1},
+            new_state={"v": 2},
+            events=["e1", "e2"],
+        )
+        assert u.workflow_id == "wf-1"
+        assert u.old_state == {"v": 1}
+        assert u.new_state == {"v": 2}
+        assert u.events == ["e1", "e2"]
+
+
+class TestAdapterBulkSyncDb:
+    """Default ``bulk_sync_db`` loops per-update through ``sync_db``."""
+
+    @pytest.mark.asyncio
+    async def test_default_impl_dispatches_to_sync_db(self):
+        seen: list[tuple[str, Any, Any, list]] = []
+
+        class _A(Adapter):
+            def to_be_act_on(self, event: Any) -> bool:
+                return False
+
+            async def act_on(self, event, context=None):
+                if False:
+                    yield
+
+            async def sync_db(self, session, workflow_id, old_state, new_state, events):
+                seen.append((workflow_id, old_state, new_state, events))
+
+        adapter = _A()
+        updates = [
+            BulkUpdate(workflow_id="wf-1", old_state="o1", new_state="n1", events=["e"]),
+            BulkUpdate(workflow_id="wf-2", old_state="o2", new_state="n2", events=[]),
+        ]
+        await adapter.bulk_sync_db(session=object(), updates=updates)
+
+        assert seen == [
+            ("wf-1", "o1", "n1", ["e"]),
+            ("wf-2", "o2", "n2", []),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_default_impl_handles_empty_updates(self):
+        class _A(Adapter):
+            def to_be_act_on(self, event: Any) -> bool:
+                return False
+
+            async def act_on(self, event, context=None):
+                if False:
+                    yield
+
+            async def sync_db(self, session, workflow_id, old_state, new_state, events):
+                raise AssertionError("should not be called")
+
+        await _A().bulk_sync_db(session=object(), updates=[])
+
+
+# ── _events_need_per_workflow_handling ─────────────────────────────────────
+
+
+class TestBulkEventCompatibility:
+    """``_events_need_per_workflow_handling`` decides whether a workflow's
+    events from ``decide`` can be processed in the bulk path or must fall
+    back to per-workflow handling (subscription/schedule/system mutations)."""
+
+    def test_plain_events_compatible(self):
+        from fleuve.repo import _events_need_per_workflow_handling
+
+        class _E(EventBase):
+            type: Literal["plain"] = "plain"
+
+        assert _events_need_per_workflow_handling([_E()]) is False
+        assert _events_need_per_workflow_handling([]) is False
+
+    def test_subscription_events_incompatible(self):
+        from fleuve.model import EvSubscriptionAdded, Sub
+        from fleuve.repo import _events_need_per_workflow_handling
+
+        ev = EvSubscriptionAdded(
+            sub=Sub(workflow_id="wf-x", event_type="*"),
+        )
+        assert _events_need_per_workflow_handling([ev]) is True
+
+    def test_system_cancel_incompatible(self):
+        from fleuve.repo import _events_need_per_workflow_handling
+
+        assert _events_need_per_workflow_handling([EvSystemCancel(reason="x")]) is True
+
+    def test_mixed_events_incompatible(self):
+        from fleuve.repo import _events_need_per_workflow_handling
+
+        class _E(EventBase):
+            type: Literal["plain2"] = "plain2"
+
+        assert (
+            _events_need_per_workflow_handling([_E(), EvSystemCancel(reason="x")])
+            is True
+        )

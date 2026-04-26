@@ -21,6 +21,7 @@ from typing_extensions import Self
 from fleuve.delay import next_cron_fire
 from fleuve.model import (
     AlreadyExists,
+    BulkUpdate,
     EvContinueAsNew,
     EvExternalSubscriptionAdded,
     EvExternalSubscriptionRemoved,
@@ -52,6 +53,35 @@ Se = TypeVar("Se", bound=StoredEvent)  # StoredEvent subclass type
 # denormalized/auxiliary DB data. Args: (session, workflow_id, old_state, new_state, events).
 # Must not commit; runs after subscription handling and before event insert.
 SyncDbHandler = Callable[[AsyncSession, str, Any, Any, list[Any]], Awaitable[None]]
+
+
+def _events_need_per_workflow_handling(events: list[Any]) -> bool:
+    """Return True if any event requires the side-effect path that
+    ``_handle_sync_events_from_decide`` performs (subscription / schedule /
+    system-cancel mutations on per-workflow tables).
+
+    Bulk processing skips that path; affected workflows fall back to
+    per-workflow ``process_command``.
+    """
+    from fleuve.model import EvCancelSchedule, EvDelay
+
+    return any(
+        isinstance(
+            ev,
+            (
+                EvSubscriptionAdded,
+                EvSubscriptionRemoved,
+                EvExternalSubscriptionAdded,
+                EvExternalSubscriptionRemoved,
+                EvScheduleAdded,
+                EvScheduleRemoved,
+                EvDelay,
+                EvCancelSchedule,
+                EvSystemCancel,
+            ),
+        )
+        for ev in events
+    )
 
 
 class StoredState(BaseModel, Generic[S]):
@@ -263,6 +293,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         self.db_external_sub_model = db_external_sub_model
         self._db_snapshot_model = db_snapshot_model
         self._snapshot_interval = snapshot_interval
+        self._adapter = adapter
         self._sync_db_handler: SyncDbHandler | None
         if sync_db is not None:
             self._sync_db_handler = sync_db
@@ -366,6 +397,167 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         else:
             await self._es.put_state(new)
         return new, events
+
+    async def bulk_process_command(
+        self,
+        workflow_ids: list[str],
+        cmd: C,
+        *,
+        batch_size: int = 1000,
+    ) -> dict[str, "tuple[StoredState[S], list[E]] | Rejection"]:
+        """Apply the same command to many workflows efficiently.
+
+        For each workflow:
+        - Loads current state
+        - Calls ``decide`` and ``evolve`` in memory
+        - Bulk-inserts events for the whole batch in one statement
+        - Calls ``Adapter.bulk_sync_db`` once per batch (default impl loops
+          per-workflow ``sync_db``; subclasses override for true bulk)
+
+        Returns per-workflow outcome:
+        - ``(StoredState, [events])`` on success (events may be ``[]`` if
+          ``decide`` returned no-op)
+        - ``Rejection`` for: workflow not found, decide rejection, version
+          conflict (caller may retry that workflow individually via
+          :meth:`process_command`)
+
+        Concurrency: optimistic — relies on the unique constraint
+        ``(workflow_id, workflow_version)`` to detect conflicts with
+        concurrent single-command writers. On conflict the offending batch
+        is rolled back and each workflow in that batch falls back to
+        :meth:`process_command` individually.
+
+        Limitations: workflows whose ``decide`` emits subscription /
+        schedule events (``EvSubscriptionAdded``, ``EvScheduleAdded``,
+        ``EvSystemCancel`` …) fall back to per-workflow processing. The
+        bulk path is intended for fan-out commands like
+        ``CmdApplyProjectSettings`` / ``CmdDelete``.
+        """
+        results: dict[str, tuple[StoredState[S], list[E]] | Rejection] = {}
+        # De-duplicate, sorted: stable order across concurrent bulk callers
+        # reduces event-version contention among themselves.
+        unique = sorted(set(workflow_ids))
+        for i in range(0, len(unique), batch_size):
+            batch = unique[i : i + batch_size]
+            await self._bulk_process_batch(batch, cmd, results)
+        return results
+
+    _BULK_INCOMPATIBLE_EVENT_TYPES: tuple[type, ...] = ()  # populated below
+
+    async def _bulk_process_batch(
+        self,
+        ids: list[str],
+        cmd: C,
+        results: dict[str, "tuple[StoredState[S], list[E]] | Rejection"],
+    ) -> None:
+        # Per-workflow plans built before the single bulk INSERT.
+        plans: dict[str, tuple[StoredState[S], list[E], StateBase]] = {}
+        fallback_ids: list[str] = []
+
+        async with self._session_maker() as s:
+            for id_ in ids:
+                try:
+                    old = await self.get_current_state(s, id_)
+                except WorkflowNotFound:
+                    results[id_] = Rejection(msg="workflow not found")
+                    continue
+
+                lifecycle = getattr(old.state, "lifecycle", "active")
+                if lifecycle == "paused":
+                    results[id_] = Rejection(msg="Workflow is paused")
+                    continue
+                if lifecycle == "cancelled":
+                    results[id_] = Rejection(msg="Workflow is cancelled")
+                    continue
+
+                evs = self.model.decide(old.state, cmd)
+                if isinstance(evs, Rejection):
+                    results[id_] = evs
+                    continue
+                if not evs:
+                    results[id_] = (old, [])
+                    continue
+
+                if _events_need_per_workflow_handling(evs):
+                    fallback_ids.append(id_)
+                    continue
+
+                new_state = self.model.evolve_(old.state, evs)
+                plans[id_] = (old, evs, new_state)
+
+            if plans:
+                event_rows: list[dict[str, Any]] = []
+                for id_, (old, evs, _new) in plans.items():
+                    for i, ev in enumerate(evs, start=1):
+                        row: dict[str, Any] = {
+                            "workflow_id": id_,
+                            "workflow_version": old.version + i,
+                            "event_type": ev.type,
+                            "workflow_type": self._workflow_type,
+                            "body": ev,
+                            "schema_version": self.model.schema_version(),
+                        }
+                        if self._namespace is not None:
+                            row["namespace"] = self._namespace
+                        event_rows.append(row)
+
+                try:
+                    await s.execute(
+                        insert(self.db_event_model).values(event_rows)
+                    )
+                except IntegrityError:
+                    # A concurrent writer beat us on at least one workflow.
+                    # Rollback and fall back to per-workflow processing for
+                    # the entire planned set; the unaffected ones replay
+                    # cheaply via single-command path.
+                    await s.rollback()
+                    fallback_ids.extend(plans.keys())
+                    plans.clear()
+
+            if plans:
+                # Adapter bulk projection update.
+                if self._adapter is not None:
+                    updates = [
+                        BulkUpdate(
+                            workflow_id=id_,
+                            old_state=old.state,
+                            new_state=new,
+                            events=evs,
+                        )
+                        for id_, (old, evs, new) in plans.items()
+                    ]
+                    await self._adapter.bulk_sync_db(s, updates)
+                elif self._sync_db_handler is not None:
+                    # Custom sync_db handler — call per workflow.
+                    for id_, (old, evs, new) in plans.items():
+                        await self._sync_db_handler(s, id_, old.state, new, evs)
+
+                # Snapshots — per-workflow upsert (cheap; kept simple).
+                for id_, (_old, _evs, new_state) in plans.items():
+                    new_version = _old.version + len(_evs)
+                    await self._maybe_snapshot(s, id_, new_state, new_version)
+
+                await s.commit()
+
+                # Update euphemeral state cache.
+                for id_, (old, evs, new_state) in plans.items():
+                    new_stored = StoredState(
+                        id=id_,
+                        state=new_state,
+                        version=old.version + len(evs),
+                    )
+                    if self.model.is_final_event(evs[-1]):
+                        await self._es.remove_state(id_)
+                    else:
+                        await self._es.put_state(new_stored)
+                    results[id_] = (new_stored, evs)
+
+        # Fallback path: process each id individually via process_command.
+        for id_ in fallback_ids:
+            try:
+                results[id_] = await self.process_command(id_, cmd)
+            except WorkflowNotFound:
+                results[id_] = Rejection(msg="workflow not found")
 
     async def _handle_sync_events_from_decide(
         self,
