@@ -293,7 +293,9 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
         self.db_external_sub_model = db_external_sub_model
         self._db_snapshot_model = db_snapshot_model
         self._snapshot_interval = snapshot_interval
-        self._adapter = adapter
+        # Public so runner factories can pass the same adapter instance to
+        # both repo and WorkflowConfig without re-constructing.
+        self.adapter = adapter
         self._sync_db_handler: SyncDbHandler | None
         if sync_db is not None:
             self._sync_db_handler = sync_db
@@ -516,7 +518,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
 
             if plans:
                 # Adapter bulk projection update.
-                if self._adapter is not None:
+                if self.adapter is not None:
                     updates = [
                         BulkUpdate(
                             workflow_id=id_,
@@ -526,7 +528,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                         )
                         for id_, (old, evs, new) in plans.items()
                     ]
-                    await self._adapter.bulk_sync_db(s, updates)
+                    await self.adapter.bulk_sync_db(s, updates)
                 elif self._sync_db_handler is not None:
                     # Custom sync_db handler — call per workflow.
                     for id_, (old, evs, new) in plans.items():

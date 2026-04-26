@@ -462,39 +462,40 @@ class WorkflowsRunner:
         predecessors: dict[str, "asyncio.Event | None"],
         completions: dict[str, asyncio.Event],
     ) -> int:
-        """Process a single event and return its global_id."""
+        """Process a single event and return its global_id.
+
+        Fan-out subscribers are dispatched via ``bulk_process_command`` —
+        N individual ``process_command`` calls would saturate the connection
+        pool at scale (e.g. project mask change → 100K alerts). Per-workflow
+        ordering is preserved by awaiting each subscriber's predecessor gate
+        before starting the bulk transaction.
+        """
         if self.to_be_act_on(event):
             await self.se.maybe_act_on(event)
         if cmd and workflow_ids:
-            async with asyncio.TaskGroup() as tg:
-                for wf_id in workflow_ids:
-                    tg.create_task(
-                        self._ordered_process(
-                            wf_id, cmd, predecessors.get(wf_id), completions[wf_id]
-                        ),
-                        name=f"{self.repo.__class__.__name__} processing {cmd} for {wf_id} from {event.workflow_id}:{event.event_no}",
-                    )
-        return event.global_id
+            try:
+                # Per-workflow ordering: wait for any in-flight prior event
+                # for each subscriber to finish before this bulk runs.
+                preds = [
+                    p for p in (predecessors.get(wf_id) for wf_id in workflow_ids)
+                    if p is not None
+                ]
+                if preds:
+                    await asyncio.gather(*(p.wait() for p in preds))
 
-    async def _ordered_process(
-        self,
-        workflow_id: str,
-        cmd: Any,
-        predecessor: "asyncio.Event | None",
-        completion: asyncio.Event,
-    ) -> None:
-        """Await predecessor, run process_command, then signal completion."""
-        try:
-            if predecessor is not None:
-                await predecessor.wait()
-            result: Any = await self.repo.process_command(workflow_id, cmd)
-            if isinstance(result, tuple):
-                stored_state, events = result
-                await self._update_subscription_cache(
-                    workflow_id, stored_state.state.subscriptions
-                )
-        finally:
-            completion.set()
+                results = await self.repo.bulk_process_command(workflow_ids, cmd)
+                for wf_id, outcome in results.items():
+                    if isinstance(outcome, tuple):
+                        stored_state, _events = outcome
+                        await self._update_subscription_cache(
+                            wf_id, stored_state.state.subscriptions
+                        )
+            finally:
+                # Always release downstream gates so subsequent events for the
+                # same workflow can proceed even on partial failure.
+                for wf_id in workflow_ids:
+                    completions[wf_id].set()
+        return event.global_id
 
     def _reap_completed(
         self, done: set[asyncio.Task], inflight: InflightTracker
