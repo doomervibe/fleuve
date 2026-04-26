@@ -620,6 +620,18 @@ class ContextLogger:
     def exception(self, msg: str, **kwargs: Any) -> None:
         self._base.exception(msg, extra={**self._extra, **kwargs})
 
+    @classmethod
+    def _is_terminal_event(cls, e: E) -> bool:
+        """True if this event ends the workflow's life — either a
+        domain-level final event (per ``is_final_event``) or a system-level
+        cancel (``EvSystemCancel``, which sets lifecycle="cancelled").
+
+        Used by the repo to decide when to evict state from the ephemeral
+        cache. Subclasses don't override this — they override
+        ``is_final_event`` for their own domain events.
+        """
+        return isinstance(e, EvSystemCancel) or cls.is_final_event(e)
+
 
 class ActionContext(BaseModel):
     """Context passed to action execution, allowing checkpoint/resume functionality."""

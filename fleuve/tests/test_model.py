@@ -504,3 +504,32 @@ class TestBulkEventCompatibility:
             _events_need_per_workflow_handling([_E(), EvSystemCancel(reason="x")])
             is True
         )
+
+
+# ── _is_terminal_event ─────────────────────────────────────────────────────
+
+
+class TestIsTerminalEvent:
+    """``Workflow._is_terminal_event`` returns True for both domain finals
+    (per ``is_final_event``) and system cancels — both end the workflow's
+    life and require evicting state from the ephemeral cache.
+    """
+
+    def test_domain_final_event_is_terminal(self):
+        from fleuve.tests.conftest import TestWorkflow, TestEvent
+
+        # TestWorkflow.is_final_event(e) returns True for value >= 100.
+        terminal = TestEvent(value=100)
+        assert TestWorkflow._is_terminal_event(terminal) is True
+
+    def test_system_cancel_is_terminal(self):
+        from fleuve.tests.conftest import TestWorkflow
+
+        ev = EvSystemCancel(reason="test")
+        assert TestWorkflow._is_terminal_event(ev) is True
+
+    def test_ordinary_event_is_not_terminal(self):
+        from fleuve.tests.conftest import TestWorkflow, TestEvent
+
+        ordinary = TestEvent(value=1)
+        assert TestWorkflow._is_terminal_event(ordinary) is False

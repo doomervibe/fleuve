@@ -392,7 +392,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                     continue
 
         new = StoredState(id=id, state=new_state, version=old.version + len(events))
-        if self.model.is_final_event(events[-1]):
+        if self.model._is_terminal_event(events[-1]):
             await self._es.remove_state(id)
         else:
             await self._es.put_state(new)
@@ -546,7 +546,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                         state=new_state,
                         version=old.version + len(evs),
                     )
-                    if self.model.is_final_event(evs[-1]):
+                    if self.model._is_terminal_event(evs[-1]):
                         await self._es.remove_state(id_)
                     else:
                         await self._es.put_state(new_stored)
@@ -813,7 +813,7 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
                 return AlreadyExists(msg=f"Workflow with id {id} already exists")
 
         ss = StoredState(id=id, state=state, version=len(events))
-        if self.model.is_final_event(events[-1]):
+        if self.model._is_terminal_event(events[-1]):
             return ss
 
         await self._es.put_state(ss)
