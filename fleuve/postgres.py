@@ -187,10 +187,21 @@ class StoredEvent(Base):
 
     pushed: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    __table_args__ = (
-        UniqueConstraint("workflow_id", "workflow_version"),
-        Index("idx__workflow_type_global_id", "workflow_type", "global_id"),
-    )
+    @declared_attr.directive
+    def __table_args__(cls) -> tuple:  # type: ignore[override]
+        # Per-subclass index/constraint instances — sharing a single
+        # ``Index(...)`` between multiple ``StoredEvent`` subclasses fails
+        # because each Index instance can be bound to only one Table.
+        # Naming the index after the table also keeps PostgreSQL happy
+        # (index names are unique per schema).
+        return (
+            UniqueConstraint("workflow_id", "workflow_version"),
+            Index(
+                f"idx__{cls.__tablename__}__workflow_type_global_id",
+                "workflow_type",
+                "global_id",
+            ),
+        )
 
 
 class StoredState(Base):
@@ -270,10 +281,18 @@ class Subscription(Base):
         String(256), nullable=True, default=None
     )
 
-    __table_args__ = (
-        Index("idx_subscription_tags", "tags", postgresql_using="gin"),
-        Index("idx_subscription_tags_all", "tags_all", postgresql_using="gin"),
-    )
+    @declared_attr.directive
+    def __table_args__(cls) -> tuple:  # type: ignore[override]
+        return (
+            Index(
+                f"idx__{cls.__tablename__}__tags", "tags", postgresql_using="gin"
+            ),
+            Index(
+                f"idx__{cls.__tablename__}__tags_all",
+                "tags_all",
+                postgresql_using="gin",
+            ),
+        )
 
 
 class ExternalSubscription(Base):
@@ -285,11 +304,15 @@ class ExternalSubscription(Base):
     workflow_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
     topic: Mapped[str] = mapped_column(String(256), primary_key=True)
 
-    __table_args__ = (
-        Index(
-            "idx_external_subscription_workflow_type_topic", "workflow_type", "topic"
-        ),
-    )
+    @declared_attr.directive
+    def __table_args__(cls) -> tuple:  # type: ignore[override]
+        return (
+            Index(
+                f"idx__{cls.__tablename__}__workflow_type_topic",
+                "workflow_type",
+                "topic",
+            ),
+        )
 
 
 class RetryPolicy(BaseModel):
@@ -427,9 +450,13 @@ class WorkflowMetadata(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
 
-    __table_args__ = (
-        Index("idx_workflow_metadata_tags", "tags", postgresql_using="gin"),
-    )
+    @declared_attr.directive
+    def __table_args__(cls) -> tuple:  # type: ignore[override]
+        return (
+            Index(
+                f"idx__{cls.__tablename__}__tags", "tags", postgresql_using="gin"
+            ),
+        )
 
 
 class WorkflowSearchAttributes(Base):
@@ -459,10 +486,12 @@ class WorkflowSearchAttributes(Base):
         onupdate=func.now(),
     )
 
-    __table_args__ = (
-        Index(
-            "idx_workflow_search_attributes_gin",
-            "attributes",
-            postgresql_using="gin",
-        ),
-    )
+    @declared_attr.directive
+    def __table_args__(cls) -> tuple:  # type: ignore[override]
+        return (
+            Index(
+                f"idx__{cls.__tablename__}__attributes_gin",
+                "attributes",
+                postgresql_using="gin",
+            ),
+        )

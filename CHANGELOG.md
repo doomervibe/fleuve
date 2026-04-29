@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Class-based (OOP) workflow definition style**: Define workflows as
+  methods on a `Workflow` subclass via `@command` and `@event_handler`
+  decorators (`fleuve.oop`).  The framework auto-derives a per-method
+  Pydantic command schema (nested wire format
+  `{"method": "...", "params": {...}}`) and dispatches through the
+  existing `decide`/`evolve` pipeline.  New repo helpers:
+  `repo.invoke(id, name, **kwargs)`, `repo.bulk_invoke(ids, name, **kwargs)`,
+  `repo.workflow(id).<method>(...)` proxy.  See `fleuve/docs/oop.md`.
+  The legacy Protocol-style API (`Workflow[E, C, S, EE]` with a static
+  `decide` and class-method `_evolve`) continues to work unchanged for
+  workflows that do not use the decorators.
 - **Sync events for subscriptions and schedules**: Emit `EvSubscriptionAdded`, `EvSubscriptionRemoved`, `EvExternalSubscriptionAdded`, `EvExternalSubscriptionRemoved`, `EvScheduleAdded`, `EvScheduleRemoved` from `decide()` to manage subscriptions and cron schedules. The repo syncs these to DB tables; `_evolve_system` updates state.
 - **Cron scheduling**: Recurring delays via `EvDelay.cron_expression` and `EvDelay.timezone`. Use croniter-compatible expressions (e.g. `0 9 * * *` for daily at 9am). The DelayScheduler automatically re-inserts the next occurrence after each fire. Fleuve UI displays next 5 cron fire times.
 - **Fleuve UI in main package**: Run `fleuve ui` from the CLI to start the web UI. Built-in default models allow connecting to any Fleuve database. Use `python scripts/build_ui.py` to build frontend assets.
@@ -21,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fleuve UI Command Gateway**: Mount command gateway in UI backend via `repos` and `command_parsers` in `create_app`
 
 ### Changed
+- **Per-subclass index names on `StoredEvent`, `Subscription`, `ExternalSubscription`, `WorkflowMetadata`, `WorkflowSearchAttributes`**: `__table_args__` is now a `@declared_attr.directive` so each concrete subclass gets its own `Index` instances, with names derived from `__tablename__` (e.g. `idx__test_events__workflow_type_global_id` instead of the previously shared `idx__workflow_type_global_id`).  This unblocks defining multiple subclasses against the same `Base.metadata`.  **Deployment note**: `create_all` and Alembic-generated migrations will see the renamed indexes on next sync.  No code changes required by callers.
 - **evolve vs _evolve**: User implements `_evolve(state, event)` for domain events; `evolve()` orchestrates system events (lifecycle, sync) and delegates to `_evolve`.
 - **load_state after truncation**: When all events after a snapshot are truncated, `load_state` correctly returns state from the snapshot (fixes `UnboundLocalError`).
 - **NATS JetStream required**: Ephemeral state caching and delay scheduling require NATS with JetStream enabled. Use `nats -js` when starting NATS.

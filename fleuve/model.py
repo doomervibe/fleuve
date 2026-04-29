@@ -294,6 +294,43 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
 
             _inject_periodic_task_methods(cls, periodic_tasks)
 
+        # Class-based (OOP) workflow detection.  No-op for legacy Protocol-style
+        # workflows that don't use @command / @event_handler decorators.
+        from fleuve.oop import _try_setup_oop_workflow
+
+        _try_setup_oop_workflow(cls)
+
+    @classmethod
+    def cmd(cls, method_name: str, **kwargs: Any) -> BaseModel:
+        """Build a typed command for an ``@command`` method on this workflow.
+
+        Used inside class-based workflow code to construct the ``next_cmd``
+        of an ``EvDelay`` or ``Schedule``::
+
+            return [
+                MyDelay(id="x", delay_until=..., next_cmd=type(self).cmd("foo", n=1)),
+            ]
+
+        Raises ``KeyError`` if *method_name* is not a registered ``@command``.
+        Available only on workflows defined with the class-based style.
+        """
+        from fleuve.oop import _cmd
+
+        return _cmd(cls, method_name, **kwargs)
+
+    @classmethod
+    def command_union(cls) -> Any:
+        """Return the discriminated union of all ``@command`` methods.
+
+        Use as the target of ``PydanticType`` for any DB column that stores a
+        command for this workflow (e.g. ``DelaySchedule.next_command``).
+        Available only on workflows defined with the class-based style;
+        raises ``TypeError`` if the workflow has no ``@command`` methods.
+        """
+        from fleuve.oop import _command_union
+
+        return _command_union(cls)
+
     @classmethod
     @abstractmethod
     def name(cls) -> str:
@@ -488,6 +525,18 @@ class Workflow(BaseModel, Generic[E, C, S, EE], ABC):
         """
         return False
 
+    @classmethod
+    def _is_terminal_event(cls, e: E) -> bool:
+        """True if this event ends the workflow's life — either a
+        domain-level final event (per ``is_final_event``) or a system-level
+        cancel (``EvSystemCancel``, which sets lifecycle="cancelled").
+
+        Used by the repo to decide when to evict state from the ephemeral
+        cache. Subclasses don't override this — they override
+        ``is_final_event`` for their own domain events.
+        """
+        return isinstance(e, EvSystemCancel) or cls.is_final_event(e)
+
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -619,18 +668,6 @@ class ContextLogger:
 
     def exception(self, msg: str, **kwargs: Any) -> None:
         self._base.exception(msg, extra={**self._extra, **kwargs})
-
-    @classmethod
-    def _is_terminal_event(cls, e: E) -> bool:
-        """True if this event ends the workflow's life — either a
-        domain-level final event (per ``is_final_event``) or a system-level
-        cancel (``EvSystemCancel``, which sets lifecycle="cancelled").
-
-        Used by the repo to decide when to evict state from the ephemeral
-        cache. Subclasses don't override this — they override
-        ``is_final_event`` for their own domain events.
-        """
-        return isinstance(e, EvSystemCancel) or cls.is_final_event(e)
 
 
 class ActionContext(BaseModel):

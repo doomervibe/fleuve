@@ -133,6 +133,9 @@ from fleuve.app import FleuveApp, WorkflowRegistration
 # Truncation
 from fleuve.truncation import TruncationService
 
+# Class-based (OOP) workflow definition
+from fleuve.oop import WorkflowRejection, command, event_handler
+
 # External NATS messaging
 from fleuve.external_messaging import (
     parse_subject,
@@ -176,6 +179,10 @@ __all__ = [
     "EvDirectMessage",
     "Sub",
     "ExternalSub",
+    # OOP / class-based workflow
+    "WorkflowRejection",
+    "command",
+    "event_handler",
     # Repository
     "AsyncRepo",
     "EuphStorageNATS",

@@ -36,6 +36,7 @@ If you're considering [Temporal](https://temporal.io/) or similar workflow engin
 - [Features](#features)
 - [Installation](#installation)
 - [Core Concepts](#core-concepts)
+- [Class-based (OOP) workflow style](fleuve/docs/oop.md) — methods + decorators instead of long isinstance chains
 - [Usage Examples](#usage-examples)
 - [Architecture](#architecture)
 - [Advanced Features](#advanced-features)

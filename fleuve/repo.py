@@ -246,6 +246,39 @@ class WorkflowNotFound(Exception):
         )
 
 
+class _WorkflowProxy(Generic[C, E, S]):
+    """Per-workflow caller-side proxy returned from ``AsyncRepo.workflow(id)``.
+
+    Each attribute lookup resolves to an async callable that builds the
+    matching ``@command`` payload and forwards to ``process_command``.
+    """
+
+    __slots__ = ("_repo", "_id")
+
+    def __init__(self, repo: "AsyncRepo[C, E, Any, Any]", workflow_id: str) -> None:
+        self._repo = repo
+        self._id = workflow_id
+
+    def __getattr__(self, name: str) -> Callable[..., Awaitable[Any]]:
+        models = getattr(self._repo.model, "_command_models", None)
+        if not models:
+            raise AttributeError(
+                f"{type(self._repo.model).__name__} is not a class-based "
+                f"workflow; cannot use repo.workflow(id).{name}(...)"
+            )
+        if name not in models:
+            raise AttributeError(
+                f"{self._repo.model.__name__} has no @command method named "
+                f"{name!r}; available: {sorted(models)}"
+            )
+
+        async def _call(**kwargs: Any) -> Any:
+            return await self._repo.invoke(self._id, name, **kwargs)
+
+        _call.__name__ = name
+        return _call
+
+
 class AsyncRepo(Generic[C, E, Wf, Se]):
     """Repository for workflow commands and event persistence.
 
@@ -309,6 +342,69 @@ class AsyncRepo(Generic[C, E, Wf, Se]):
             self._sync_db_handler = _adapter_sync_db
         else:
             self._sync_db_handler = None
+
+    def workflow(self, id: str) -> "_WorkflowProxy[C, E, S]":
+        """Return a proxy bound to ``id`` whose attributes mirror the
+        workflow's ``@command`` methods.
+
+        Each method call constructs the right command via the cached
+        per-method Pydantic schema and routes through ``process_command``::
+
+            await repo.workflow("wf-1").increment(by=2)
+
+        Available only for class-based (OOP) workflows.  Raises
+        ``AttributeError`` on access for an unknown method, and ``TypeError``
+        when used against a legacy Protocol-style workflow.
+        """
+        return _WorkflowProxy(self, id)
+
+    async def invoke(
+        self,
+        id: str,
+        method_name: str,
+        **kwargs: Any,
+    ) -> "tuple[StoredState[S], list[E]] | Rejection":
+        """Process a class-based workflow command by method name.
+
+        Equivalent to ``repo.process_command(id, model.cmd(method_name, **kwargs))``
+        but does the lookup centrally and returns clearer errors when the
+        method is unknown.
+        """
+        cmd = self._build_oop_command(method_name, kwargs)
+        return await self.process_command(id, cast(C, cmd))
+
+    async def bulk_invoke(
+        self,
+        ids: list[str],
+        method_name: str,
+        *,
+        batch_size: int = 1000,
+        **kwargs: Any,
+    ) -> "dict[str, tuple[StoredState[S], list[E]] | Rejection]":
+        """Bulk variant of :meth:`invoke` — apply the same method to many workflows.
+
+        The same kwargs are forwarded to every workflow, identical to how
+        ``bulk_process_command`` reuses a single command across the batch.
+        """
+        cmd = self._build_oop_command(method_name, kwargs)
+        return await self.bulk_process_command(
+            ids, cast(C, cmd), batch_size=batch_size
+        )
+
+    def _build_oop_command(self, method_name: str, kwargs: dict[str, Any]) -> Any:
+        models = getattr(self.model, "_command_models", None)
+        if not models:
+            raise TypeError(
+                f"{self.model.__name__} is not a class-based workflow "
+                f"(no @command methods registered); use process_command() "
+                f"with a typed command object instead."
+            )
+        if method_name not in models:
+            raise KeyError(
+                f"{self.model.__name__} has no @command method named "
+                f"{method_name!r}; available: {sorted(models)}"
+            )
+        return self.model.cmd(method_name, **kwargs)
 
     async def process_command(
         self,

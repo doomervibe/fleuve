@@ -1,0 +1,415 @@
+"""Class-based (OOP) workflow definition style.
+
+This module adds a second way to define a Fleuve workflow.  Instead of
+implementing the ``Workflow[E, C, S, EE]`` Protocol with a static
+``decide`` and class-method ``_evolve`` that dispatch via long
+isinstance chains, you can model commands as **methods** on a
+``Workflow`` subclass:
+
+    from fleuve import Workflow, command, event_handler, WorkflowRejection
+
+    class Counter(Workflow):
+        state: CounterState | None = None
+
+        @classmethod
+        def name(cls) -> str:
+            return "counter"
+
+        @command
+        def increment(self, by: int) -> list[EvIncremented]:
+            if by <= 0:
+                raise WorkflowRejection("must be positive")
+            return [EvIncremented(by=by)]
+
+        @event_handler
+        def _on_inc(self, ev: EvIncremented) -> CounterState:
+            current = self.state.count if self.state else 0
+            return CounterState(count=current + ev.by, ...)
+
+The framework auto-derives a per-method Pydantic command schema from
+the method signature, builds a discriminated union (``method`` field),
+and dispatches commands through the existing ``decide``/``evolve``
+pipeline.
+
+Wire format
+-----------
+Each ``@command`` method generates a Pydantic model::
+
+    {
+      "method": "increment",
+      "params": {"by": 1}
+    }
+
+The class-level ``Workflow.command_union()`` returns the discriminated
+union of all per-method command models — use it as the ``PydanticType``
+target for ``DelaySchedule.next_command`` and any other column that
+stores commands::
+
+    class CounterDelaySchedule(DelaySchedule):
+        next_command = mapped_column(PydanticType(Counter.command_union()), ...)
+
+Caller-side surface
+-------------------
+``AsyncRepo`` gains three helpers for class-based workflows::
+
+    await repo.invoke(workflow_id, "increment", by=2)
+    await repo.workflow(workflow_id).increment(by=2)
+    await repo.bulk_invoke([id1, id2], "increment", by=2)
+
+All of them route through the same ``process_command`` /
+``bulk_process_command`` machinery as the legacy style.
+"""
+
+from __future__ import annotations
+
+import inspect
+from typing import Annotated, Any, Callable, Literal, Type, Union
+
+from pydantic import BaseModel, Field, create_model
+
+__all__ = [
+    "WorkflowRejection",
+    "command",
+    "event_handler",
+]
+
+# ---------------------------------------------------------------------------
+# Public surface
+
+
+class WorkflowRejection(Exception):
+    """Raised inside a ``@command`` method to reject the command.
+
+    The framework catches this at the ``decide`` boundary and converts it to
+    a regular ``fleuve.Rejection`` so callers see the same return type they
+    do from the legacy Protocol-style API.
+    """
+
+    def __init__(self, msg: str = "") -> None:
+        super().__init__(msg)
+        self.msg = msg
+
+
+_COMMAND_MARKER = "__fleuve_command__"
+_EVENT_HANDLER_MARKER = "__fleuve_event_handler__"
+
+
+def command(fn: Callable) -> Callable:
+    """Mark a method as a workflow command handler.
+
+    The method must:
+    - take ``self`` as its first parameter,
+    - declare each remaining parameter with a type annotation,
+    - return ``list[Event]`` (or any iterable of events; ``None``/empty is OK),
+    - optionally raise :class:`WorkflowRejection` to reject.
+
+    Disallowed: positional-only parameters, ``*args``, ``**kwargs`` (the
+    framework needs a stable, named parameter list to derive a schema).
+    """
+    setattr(fn, _COMMAND_MARKER, True)
+    return fn
+
+
+def event_handler(fn: Callable) -> Callable:
+    """Mark a method as the apply/evolve handler for a specific event type.
+
+    The handler is selected by ``isinstance(event, <annotation of 2nd arg>)``.
+    Multiple handlers may be registered per workflow (one per event class);
+    they fire in declaration order, and the first match wins.
+
+    The method must take ``(self, event: <EventClass>)`` and return the new
+    state.  ``self.state`` is read-only — return a new state object (e.g.
+    via ``state.model_copy(update={...})`` or ``state.apply(...)``).
+    """
+    setattr(fn, _EVENT_HANDLER_MARKER, True)
+    return fn
+
+
+# ---------------------------------------------------------------------------
+# Class-creation hook (called from Workflow.__init_subclass__)
+
+
+def _has_oop_methods(cls: type) -> bool:
+    """True if any direct attribute on *cls* is a @command or @event_handler."""
+    for v in cls.__dict__.values():
+        if callable(v) and (
+            getattr(v, _COMMAND_MARKER, False)
+            or getattr(v, _EVENT_HANDLER_MARKER, False)
+        ):
+            return True
+    return False
+
+
+def _try_setup_oop_workflow(cls: type) -> None:
+    """Set up class-based dispatch if ``cls`` declares any ``@command`` /
+    ``@event_handler`` methods.  No-op for legacy Protocol-style workflows.
+
+    Called from ``Workflow.__init_subclass__`` so existing workflows that
+    don't use the decorators keep their current behaviour unchanged.
+    """
+    if not _has_oop_methods(cls):
+        return
+    _setup_oop_workflow(cls)
+
+
+def _setup_oop_workflow(cls: type) -> None:
+    """Build per-method command models, register event handlers, and
+    install ``decide`` / ``_evolve`` dispatchers.
+
+    Direct ``cls.__dict__`` inspection only — does not walk the MRO.
+    Subclassing an OOP workflow does **not** inherit ``@command`` methods
+    from the parent in v1.
+    """
+    # Require state declared as a Pydantic field (so model_construct works).
+    if "state" not in getattr(cls, "model_fields", {}) and "state" not in getattr(
+        cls, "__annotations__", {}
+    ):
+        raise TypeError(
+            f"{cls.__name__} uses @command/@event_handler but does not declare "
+            f"a `state` field.  Add e.g. `state: MyState | None = None` to the "
+            f"class body."
+        )
+
+    cmd_handlers: dict[str, Callable] = {}
+    cmd_models: dict[str, Type[BaseModel]] = {}
+    ev_handlers: list[tuple[type, Callable]] = []
+
+    for name, attr in cls.__dict__.items():
+        if not callable(attr):
+            continue
+        if getattr(attr, _COMMAND_MARKER, False):
+            model = _build_command_model(cls, name, attr)
+            cmd_handlers[name] = attr
+            cmd_models[name] = model
+        elif getattr(attr, _EVENT_HANDLER_MARKER, False):
+            ev_type = _extract_event_type(cls, name, attr)
+            ev_handlers.append((ev_type, attr))
+
+    cls._command_handlers = cmd_handlers  # type: ignore[attr-defined]
+    cls._command_models = cmd_models  # type: ignore[attr-defined]
+    cls._event_handlers = tuple(ev_handlers)  # type: ignore[attr-defined]
+    cls._is_oop_workflow = True  # type: ignore[attr-defined]
+
+    # Install dispatchers if the user hasn't overridden them.  Using
+    # cls.__dict__ (not hasattr) so inherited abstract methods don't block.
+    if "decide" not in cls.__dict__:
+        cls.decide = classmethod(_oop_decide)  # type: ignore[method-assign]
+    if "_evolve" not in cls.__dict__:
+        cls._evolve = classmethod(_oop_evolve)  # type: ignore[method-assign]
+
+    # Strip from __abstractmethods__ so the class can be instantiated /
+    # registered without the legacy abstract-method enforcement firing.
+    if hasattr(cls, "__abstractmethods__"):
+        cls.__abstractmethods__ = frozenset(
+            cls.__abstractmethods__ - {"decide", "_evolve"}
+        )
+
+
+# ---------------------------------------------------------------------------
+# Schema derivation
+
+
+def _build_command_model(
+    cls: type, method_name: str, fn: Callable
+) -> Type[BaseModel]:
+    """Build a per-method Pydantic command model.
+
+    Wire format is nested::
+
+        {"method": "<name>", "params": {<method-signature-fields>}}
+    """
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.items())
+    if not params or params[0][0] != "self":
+        raise TypeError(
+            f"@command {cls.__name__}.{method_name} must take 'self' as the "
+            f"first parameter"
+        )
+
+    param_fields: dict[str, Any] = {}
+    for pname, p in params[1:]:
+        if p.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+            inspect.Parameter.POSITIONAL_ONLY,
+        ):
+            raise TypeError(
+                f"@command {cls.__name__}.{method_name}: parameter {pname!r} "
+                f"uses positional-only / *args / **kwargs which is not "
+                f"supported (the framework needs a stable named parameter list)"
+            )
+        ann = p.annotation if p.annotation is not inspect.Parameter.empty else Any
+        default = p.default if p.default is not inspect.Parameter.empty else ...
+        param_fields[pname] = (ann, default)
+
+    # Inner params model: one per @command method.
+    params_model_name = f"_{cls.__name__}__{method_name}__Params"
+    params_model = create_model(
+        params_model_name,
+        __base__=BaseModel,
+        **param_fields,
+    )
+
+    # Outer command model: {method, params}.  The Literal discriminator on
+    # ``method`` lets us build a tagged union over all per-method models.
+    cmd_model_name = f"_{cls.__name__}__cmd__{method_name}"
+    cmd_model = create_model(
+        cmd_model_name,
+        __base__=BaseModel,
+        method=(Literal[method_name], method_name),  # type: ignore[valid-type]
+        params=(params_model, ...),
+    )
+    # Stash useful metadata for introspection / better error messages.
+    setattr(cmd_model, "__fleuve_method_name__", method_name)
+    setattr(cmd_model, "__fleuve_owner__", cls)
+    setattr(cmd_model, "__fleuve_params_model__", params_model)
+    return cmd_model
+
+
+def _extract_event_type(cls: type, method_name: str, fn: Callable) -> type:
+    sig = inspect.signature(fn)
+    params = list(sig.parameters.values())
+    if len(params) < 2:
+        raise TypeError(
+            f"@event_handler {cls.__name__}.{method_name} must take "
+            f"(self, event)"
+        )
+    ann = params[1].annotation
+    if ann is inspect.Parameter.empty:
+        raise TypeError(
+            f"@event_handler {cls.__name__}.{method_name}: the event "
+            f"parameter must have a type annotation (e.g. `ev: MyEvent`)"
+        )
+    if not isinstance(ann, type):
+        raise TypeError(
+            f"@event_handler {cls.__name__}.{method_name}: event annotation "
+            f"must be a class, got {ann!r}"
+        )
+    return ann
+
+
+# ---------------------------------------------------------------------------
+# Dispatchers (installed on each OOP workflow class)
+
+
+def _oop_decide(cls: type, state: Any, cmd: Any) -> Any:
+    """Dispatch a ``@command`` method by ``cmd.method``.
+
+    Returns ``list[Event]`` or ``Rejection``.
+    """
+    from fleuve.model import Rejection  # avoid circular import at module load
+
+    method = getattr(cmd, "method", None)
+    handlers: dict[str, Callable] = cls._command_handlers  # type: ignore[attr-defined]
+    if method is None or method not in handlers:
+        return Rejection(msg=f"unknown command method: {method!r}")
+
+    handler = handlers[method]
+    instance = _build_instance(cls, state)
+    params_obj = getattr(cmd, "params", None)
+    kwargs: dict[str, Any]
+    if params_obj is None:
+        kwargs = {}
+    else:
+        # Iterate fields rather than model_dump() so nested Pydantic objects
+        # (e.g. ``target_info: TargetInfo``) reach the handler intact.
+        kwargs = {
+            field_name: getattr(params_obj, field_name)
+            for field_name in type(params_obj).model_fields
+        }
+
+    try:
+        result = handler(instance, **kwargs)
+    except WorkflowRejection as e:
+        return Rejection(msg=e.msg)
+    return list(result or [])
+
+
+def _oop_evolve(cls: type, state: Any, event: Any) -> Any:
+    """Dispatch ``@event_handler`` methods by ``isinstance(event, <type>)``.
+
+    Falls through to ``state`` unchanged when no handler matches.  System
+    events (cancel, pause, sub-add, …) are handled by ``Workflow._evolve_system``
+    *before* this method is reached, so users do not need to register
+    handlers for them.
+    """
+    handlers: tuple[tuple[type, Callable], ...] = cls._event_handlers  # type: ignore[attr-defined]
+    for ev_type, handler in handlers:
+        if isinstance(event, ev_type):
+            instance = _build_instance(cls, state)
+            return handler(instance, event)
+    return state
+
+
+def _build_instance(cls: type, state: Any) -> Any:
+    """Construct a class-based workflow instance bound to *state*.
+
+    Uses Pydantic's ``model_construct`` (no validation, no copy) for speed.
+    Shallow-copies the state so an ``@command`` method that accidentally
+    mutates ``self.state`` cannot corrupt the caller's reference.
+    """
+    if state is not None and isinstance(state, BaseModel):
+        bound_state = state.model_copy()  # shallow; cheap
+    else:
+        bound_state = state
+    return cls.model_construct(state=bound_state)  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Convenience helpers exposed via the Workflow base
+
+
+def _cmd(cls: type, method_name: str, **kwargs: Any) -> BaseModel:
+    """Build a typed command instance for a method.
+
+    Usage from inside a ``@command`` method that schedules a delay::
+
+        return [
+            MyDelay(
+                id="check",
+                delay_until=...,
+                next_cmd=type(self).cmd("perform_check", x=1),
+            )
+        ]
+
+    Or from outside (rare — prefer ``repo.invoke`` / ``repo.workflow(id).x()``)::
+
+        await repo.process_command(id, Counter.cmd("increment", by=2))
+    """
+    models: dict[str, Type[BaseModel]] = cls._command_models  # type: ignore[attr-defined]
+    if method_name not in models:
+        raise KeyError(
+            f"{cls.__name__} has no @command method named {method_name!r}; "
+            f"available: {sorted(models)}"
+        )
+    cmd_model = models[method_name]
+    params_model = getattr(cmd_model, "__fleuve_params_model__")
+    return cmd_model(method=method_name, params=params_model(**kwargs))
+
+
+def _command_union(cls: type) -> Any:
+    """Return a discriminated union of all ``@command`` models for *cls*.
+
+    Use as the target of ``PydanticType`` for any DB column that stores a
+    command (``DelaySchedule.next_command``, custom command tables, …)::
+
+        class CounterDelaySchedule(DelaySchedule):
+            next_command = mapped_column(
+                PydanticType(Counter.command_union()),
+                nullable=False,
+            )
+
+    Raises ``TypeError`` if *cls* has no ``@command`` methods (a silent
+    empty union would deserialize to nothing useful and produce confusing
+    runtime errors).
+    """
+    models: dict[str, Type[BaseModel]] = getattr(cls, "_command_models", {})
+    if not models:
+        raise TypeError(
+            f"{cls.__name__} has no @command methods; cannot build a "
+            f"command union"
+        )
+    model_list = list(models.values())
+    if len(model_list) == 1:
+        return model_list[0]
+    return Annotated[Union[tuple(model_list)], Field(discriminator="method")]
