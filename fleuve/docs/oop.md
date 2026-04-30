@@ -252,12 +252,82 @@ A class that uses **any** `@command` or `@event_handler` decorator must
 declare a `state` field on the class.  The framework raises a clear
 `TypeError` at class-creation time if it is missing.
 
+## Framework-emitted commands: `@on_command`
+
+Some commands are constructed by the framework itself rather than by
+user code calling `cls.cmd("name", ...)` — the canonical example is
+`CmdPeriodicTaskDue`, which the periodic-task system sets as the
+`next_cmd` of every `EvPeriodicDelay` it schedules.  These commands
+have no `method` field, so the regular `@command` method-routing
+dispatch can't reach them.
+
+Use `@on_command(CmdType)` to register an `isinstance`-routed handler:
+
+```python
+from fleuve import (
+    Workflow,
+    PeriodicTask,
+    command,
+    event_handler,
+    on_command,
+)
+from fleuve.model import CmdPeriodicTaskDue
+
+class Janitor(Workflow, periodic_tasks=[
+    PeriodicTask(id="cleanup", interval=timedelta(hours=1)),
+]):
+    state: JanitorState | None = None
+
+    @on_command(CmdPeriodicTaskDue)
+    def on_periodic_task_due(
+        self, cmd: CmdPeriodicTaskDue
+    ) -> list[EvCleanupRequested]:
+        if cmd.task_id == "cleanup":
+            return [
+                EvCleanupRequested(),
+                *type(self).reschedule_periodic_task("cleanup"),
+            ]
+        return []
+
+    @event_handler
+    def _on_cleanup_requested(
+        self, ev: EvCleanupRequested
+    ) -> JanitorState:
+        return (self.state or JanitorState()).apply(
+            last_cleanup_request=ev.at
+        )
+```
+
+`@on_command` handlers are checked **before** the `@command`
+method-routing dispatcher, so a raw command never falls through to
+`"unknown command method: None"`.  Multiple `@on_command` decorators
+may coexist on the same class (one per command type); they fire in
+declaration order, and the first matching `isinstance` wins.
+
+The `command_union()` does **not** include `@on_command` handlers —
+they consume pre-existing classes rather than auto-deriving new ones.
+For DB columns that store framework commands alongside user commands
+(e.g. a `DelaySchedule.next_command` that holds both `cls.cmd(...)`
+and `CmdPeriodicTaskDue`), build a wider union manually:
+
+```python
+from typing import Union
+from fleuve.model import CmdPeriodicTaskDue
+
+JanitorCommand = Union[Janitor.command_union(), CmdPeriodicTaskDue]
+
+class JanitorDelaySchedule(DelaySchedule):
+    next_command = mapped_column(
+        PydanticType(JanitorCommand), nullable=False
+    )
+```
+
 ## Backward compatibility
 
 - Existing `Workflow[E, C, S, EE]` protocol-style workflows are
   unaffected.  The `__init_subclass__` hook that detects class-based
-  workflows is a no-op for any class that has neither `@command` nor
-  `@event_handler` methods.
+  workflows is a no-op for any class that has no `@command`,
+  `@event_handler`, or `@on_command` methods.
 - Both styles coexist on the same `wf_events` table: events are
   discriminated by their `type` field, which is unchanged.
 - All `AsyncRepo` lifecycle methods (`process_command`,

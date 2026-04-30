@@ -44,8 +44,10 @@ from fleuve import (
     command,
     event_handler,
     handles,
+    on_command,
 )
 from fleuve.model import (
+    CmdPeriodicTaskDue,
     EventBase,
     EvSystemCancel,
     EvSystemPause,
@@ -60,7 +62,6 @@ from fleuve.postgres import (
     Subscription,
 )
 from sqlalchemy import BigInteger, Computed, String
-
 
 # ---------------------------------------------------------------------------
 # Test workflow: Counter
@@ -361,9 +362,7 @@ class TestOopUnit:
         from pydantic import TypeAdapter
 
         adapter = TypeAdapter(CounterCmdUnion)
-        cmd = adapter.validate_python(
-            {"method": "tick", "params": {"increment_by": 5}}
-        )
+        cmd = adapter.validate_python({"method": "tick", "params": {"increment_by": 5}})
         assert cmd.method == "tick"
         assert cmd.params.increment_by == 5  # type: ignore[attr-defined]
 
@@ -473,6 +472,115 @@ class TestOopUnit:
         assert original.count == 0
         assert captured["mutated_local_count"] == 42
 
+    def test_on_command_routes_framework_command_by_isinstance(self) -> None:
+        """``@on_command`` registers an isinstance-routed handler for a
+        flat command class (no ``method`` field).  The dispatcher must
+        find it before falling through to ``"unknown command method"``.
+        """
+        captured: dict[str, Any] = {}
+
+        class Janitor(Workflow):
+            state: CounterState | None = None
+
+            @classmethod
+            def name(cls) -> str:
+                return "janitor"
+
+            @on_command(CmdPeriodicTaskDue)
+            def on_periodic(self, cmd: CmdPeriodicTaskDue) -> list[EvIncremented]:
+                captured["task_id"] = cmd.task_id
+                return [EvIncremented(by=1)]
+
+            @event_handler
+            def _on_inc(self, ev: EvIncremented) -> CounterState:
+                cur = self.state or CounterState()
+                return cur.apply(count=cur.count + ev.by)
+
+        events = Janitor.decide(None, CmdPeriodicTaskDue(task_id="cleanup"))
+        assert isinstance(events, list)
+        assert len(events) == 1
+        assert isinstance(events[0], EvIncremented)
+        assert captured["task_id"] == "cleanup"
+
+    def test_on_command_does_not_intercept_method_routed_commands(self) -> None:
+        """An ``@on_command`` handler must not fire for commands of an
+        unrelated type — those still flow through the ``cmd.method``
+        dispatcher to ``@command`` methods.
+        """
+
+        class Mixed(Workflow):
+            state: CounterState | None = None
+
+            @classmethod
+            def name(cls) -> str:
+                return "mixed"
+
+            @on_command(CmdPeriodicTaskDue)
+            def on_periodic(self, cmd: CmdPeriodicTaskDue) -> list[EvIncremented]:
+                return [EvIncremented(by=999)]  # would be wrong if it fired
+
+            @command
+            def increment(self, by: int) -> list[EvIncremented]:
+                return [EvIncremented(by=by)]
+
+            @event_handler
+            def _h(self, ev: EvIncremented) -> CounterState:
+                return self.state or CounterState()
+
+        events = Mixed.decide(None, Mixed.cmd("increment", by=3))
+        assert isinstance(events, list)
+        assert len(events) == 1
+        assert events[0].by == 3  # type: ignore[attr-defined]
+
+    def test_on_command_rejection_via_exception(self) -> None:
+        """Raising ``WorkflowRejection`` from an ``@on_command`` handler
+        becomes a ``Rejection`` at the ``decide`` boundary, same as for
+        ``@command`` handlers.
+        """
+
+        class Strict(Workflow):
+            state: CounterState | None = None
+
+            @classmethod
+            def name(cls) -> str:
+                return "strict"
+
+            @on_command(CmdPeriodicTaskDue)
+            def on_periodic(self, cmd: CmdPeriodicTaskDue) -> list[Any]:
+                raise WorkflowRejection(f"task {cmd.task_id!r} not allowed")
+
+            @event_handler
+            def _h(self, ev: EvIncremented) -> CounterState:
+                return self.state or CounterState()
+
+        result = Strict.decide(None, CmdPeriodicTaskDue(task_id="bad"))
+        assert isinstance(result, Rejection)
+        assert "not allowed" in result.msg
+
+    def test_on_command_handlers_registered(self) -> None:
+        """``_raw_command_handlers`` is the storage for ``@on_command``
+        registrations; introspectable for diagnostics.
+        """
+
+        class Janitor2(Workflow):
+            state: CounterState | None = None
+
+            @classmethod
+            def name(cls) -> str:
+                return "janitor2"
+
+            @on_command(CmdPeriodicTaskDue)
+            def on_periodic(self, cmd: CmdPeriodicTaskDue) -> list[EvIncremented]:
+                return []
+
+            @event_handler
+            def _h(self, ev: EvIncremented) -> CounterState:
+                return self.state or CounterState()
+
+        raw = Janitor2._raw_command_handlers  # type: ignore[attr-defined]
+        assert len(raw) == 1
+        assert raw[0][0] is CmdPeriodicTaskDue
+
 
 # ---------------------------------------------------------------------------
 # Integration tests — require the DB (and NATS for some).  Reuse the
@@ -518,9 +626,7 @@ class TestOopRepo:
     async def test_create_new_via_invoke(self, counter_repo, test_session) -> None:
         # Build the cmd with the model.cmd helper — repo.create_new still
         # accepts a typed Pydantic command.
-        result = await counter_repo.create_new(
-            Counter.cmd("increment", by=10), "wf-1"
-        )
+        result = await counter_repo.create_new(Counter.cmd("increment", by=10), "wf-1")
         assert not isinstance(result, Rejection)
         assert result.state.count == 10
         assert result.state.history == [10]
@@ -574,9 +680,7 @@ class TestOopRepo:
     async def test_bulk_invoke_fan_out(self, counter_repo) -> None:
         ids = [f"wf-bulk-{i}" for i in range(5)]
         for i, wf_id in enumerate(ids):
-            await counter_repo.create_new(
-                Counter.cmd("increment", by=i + 1), wf_id
-            )
+            await counter_repo.create_new(Counter.cmd("increment", by=i + 1), wf_id)
         result = await counter_repo.bulk_invoke(ids, "increment", by=10)
         assert len(result) == 5
         for i, wf_id in enumerate(ids):
@@ -708,9 +812,7 @@ class TestOopLifecycle:
         assert "cancelled" in rej.msg.lower()
 
     @pytest.mark.asyncio
-    async def test_final_event_evicts_from_cache(
-        self, counter_repo
-    ) -> None:
+    async def test_final_event_evicts_from_cache(self, counter_repo) -> None:
         await counter_repo.create_new(Counter.cmd("increment", by=1), "wf-stop")
         await counter_repo.invoke("wf-stop", "stop", reason="end of test")
         cached = await counter_repo._es.get_state("wf-stop")
@@ -755,9 +857,7 @@ class TestOopContinueAsNew:
         # events should remain.  State is preserved across the reset.
         post = (
             await test_session.execute(
-                select(
-                    CounterEventModel.workflow_version, CounterEventModel.event_type
-                )
+                select(CounterEventModel.workflow_version, CounterEventModel.event_type)
                 .where(CounterEventModel.workflow_id == "wf-can")
                 .order_by(CounterEventModel.workflow_version)
             )
@@ -776,9 +876,7 @@ class TestOopAdapter:
     class-based cmd → repo.process_command routes through OOP dispatch."""
 
     @pytest.mark.asyncio
-    async def test_adapter_yields_oop_command_into_counter(
-        self, counter_repo
-    ) -> None:
+    async def test_adapter_yields_oop_command_into_counter(self, counter_repo) -> None:
         await counter_repo.create_new(Counter.cmd("increment", by=10), "wf-sub")
 
         # Simulate what the runner does: adapter yields a Counter cmd built

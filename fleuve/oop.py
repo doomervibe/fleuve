@@ -71,6 +71,7 @@ __all__ = [
     "WorkflowRejection",
     "command",
     "event_handler",
+    "on_command",
 ]
 
 # ---------------------------------------------------------------------------
@@ -92,6 +93,7 @@ class WorkflowRejection(Exception):
 
 _COMMAND_MARKER = "__fleuve_command__"
 _EVENT_HANDLER_MARKER = "__fleuve_event_handler__"
+_ON_COMMAND_MARKER = "__fleuve_on_command__"
 
 
 def command(fn: Callable) -> Callable:
@@ -125,16 +127,64 @@ def event_handler(fn: Callable) -> Callable:
     return fn
 
 
+def on_command(cmd_type: type) -> Callable[[Callable], Callable]:
+    """Mark a method as the handler for a specific raw command class.
+
+    Used for **framework-emitted** commands that fleuve constructs itself,
+    without going through ``cls.cmd("method", ...)`` — the canonical case is
+    :class:`fleuve.model.CmdPeriodicTaskDue`, which the periodic-task system
+    sets as the ``next_cmd`` of every ``EvPeriodicDelay`` it schedules.
+    These commands have no ``method`` field, so the regular ``@command``
+    method-routing dispatch can't reach them.
+
+    Dispatch is by ``isinstance(cmd, cmd_type)``.  ``@on_command`` handlers
+    are checked *before* the ``@command`` method-routing dispatcher, so a
+    raw command never falls through to ``"unknown command method: None"``.
+
+    The decorated method must take ``(self, cmd: <cmd_type>)`` and return
+    ``list[Event]`` (or any iterable of events; ``None`` / empty is OK), or
+    raise :class:`WorkflowRejection` to reject.
+
+    Usage::
+
+        from fleuve import Workflow, on_command, event_handler
+        from fleuve.model import CmdPeriodicTaskDue
+
+        class MyWorkflow(Workflow, periodic_tasks=[...]):
+            state: MyState | None = None
+
+            @on_command(CmdPeriodicTaskDue)
+            def on_periodic_task_due(
+                self, cmd: CmdPeriodicTaskDue
+            ) -> list[Event]:
+                # branch by cmd.task_id ...
+                return []
+
+    Multiple ``@on_command`` decorators may be registered per workflow
+    (one per command class); they fire in declaration order, and the
+    first matching ``isinstance`` wins.
+    """
+
+    def decorator(fn: Callable) -> Callable:
+        setattr(fn, _ON_COMMAND_MARKER, cmd_type)
+        return fn
+
+    return decorator
+
+
 # ---------------------------------------------------------------------------
 # Class-creation hook (called from Workflow.__init_subclass__)
 
 
 def _has_oop_methods(cls: type) -> bool:
-    """True if any direct attribute on *cls* is a @command or @event_handler."""
+    """True if any direct attribute on *cls* is a @command, @event_handler,
+    or @on_command-decorated method.
+    """
     for v in cls.__dict__.values():
         if callable(v) and (
             getattr(v, _COMMAND_MARKER, False)
             or getattr(v, _EVENT_HANDLER_MARKER, False)
+            or getattr(v, _ON_COMMAND_MARKER, None) is not None
         ):
             return True
     return False
@@ -173,6 +223,7 @@ def _setup_oop_workflow(cls: type) -> None:
     cmd_handlers: dict[str, Callable] = {}
     cmd_models: dict[str, Type[BaseModel]] = {}
     ev_handlers: list[tuple[type, Callable]] = []
+    raw_cmd_handlers: list[tuple[type, Callable]] = []
 
     for name, attr in cls.__dict__.items():
         if not callable(attr):
@@ -184,10 +235,15 @@ def _setup_oop_workflow(cls: type) -> None:
         elif getattr(attr, _EVENT_HANDLER_MARKER, False):
             ev_type = _extract_event_type(cls, name, attr)
             ev_handlers.append((ev_type, attr))
+        else:
+            raw_cmd_type = getattr(attr, _ON_COMMAND_MARKER, None)
+            if raw_cmd_type is not None:
+                raw_cmd_handlers.append((raw_cmd_type, attr))
 
     cls._command_handlers = cmd_handlers  # type: ignore[attr-defined]
     cls._command_models = cmd_models  # type: ignore[attr-defined]
     cls._event_handlers = tuple(ev_handlers)  # type: ignore[attr-defined]
+    cls._raw_command_handlers = tuple(raw_cmd_handlers)  # type: ignore[attr-defined]
     cls._is_oop_workflow = True  # type: ignore[attr-defined]
 
     # Install dispatchers if the user hasn't overridden them.  Using
@@ -209,9 +265,7 @@ def _setup_oop_workflow(cls: type) -> None:
 # Schema derivation
 
 
-def _build_command_model(
-    cls: type, method_name: str, fn: Callable
-) -> Type[BaseModel]:
+def _build_command_model(cls: type, method_name: str, fn: Callable) -> Type[BaseModel]:
     """Build a per-method Pydantic command model.
 
     Wire format is nested::
@@ -271,8 +325,7 @@ def _extract_event_type(cls: type, method_name: str, fn: Callable) -> type:
     params = list(sig.parameters.values())
     if len(params) < 2:
         raise TypeError(
-            f"@event_handler {cls.__name__}.{method_name} must take "
-            f"(self, event)"
+            f"@event_handler {cls.__name__}.{method_name} must take " f"(self, event)"
         )
     ann = params[1].annotation
     if ann is inspect.Parameter.empty:
@@ -293,11 +346,33 @@ def _extract_event_type(cls: type, method_name: str, fn: Callable) -> type:
 
 
 def _oop_decide(cls: type, state: Any, cmd: Any) -> Any:
-    """Dispatch a ``@command`` method by ``cmd.method``.
+    """Dispatch a command to its handler.
+
+    Two routes, tried in order:
+
+    1. **Raw isinstance route** — for framework-emitted commands registered
+       via :func:`on_command`.  These have no ``method`` field; they're
+       routed by ``isinstance(cmd, cmd_type)`` against the
+       ``@on_command``-decorated methods on *cls*.  First match wins.
+
+    2. **Method-routed route** — for user commands built via ``cls.cmd``.
+       These have a ``method`` field that names the ``@command`` handler.
 
     Returns ``list[Event]`` or ``Rejection``.
     """
     from fleuve.model import Rejection  # avoid circular import at module load
+
+    raw_handlers: tuple[tuple[type, Callable], ...] = getattr(
+        cls, "_raw_command_handlers", ()
+    )
+    for cmd_type, handler in raw_handlers:
+        if isinstance(cmd, cmd_type):
+            instance = _build_instance(cls, state)
+            try:
+                result = handler(instance, cmd)
+            except WorkflowRejection as e:
+                return Rejection(msg=e.msg)
+            return list(result or [])
 
     method = getattr(cmd, "method", None)
     handlers: dict[str, Callable] = cls._command_handlers  # type: ignore[attr-defined]
@@ -406,8 +481,7 @@ def _command_union(cls: type) -> Any:
     models: dict[str, Type[BaseModel]] = getattr(cls, "_command_models", {})
     if not models:
         raise TypeError(
-            f"{cls.__name__} has no @command methods; cannot build a "
-            f"command union"
+            f"{cls.__name__} has no @command methods; cannot build a " f"command union"
         )
     model_list = list(models.values())
     if len(model_list) == 1:
