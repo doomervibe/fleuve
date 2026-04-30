@@ -4,7 +4,17 @@ import inspect
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Sequence
-from typing import Any, Callable, Generic, Iterator, Literal, Type, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Generic,
+    Iterator,
+    Literal,
+    Self,
+    Type,
+    TypeVar,
+    Union,
+)
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
@@ -101,10 +111,12 @@ class StateBase(BaseModel):
     lifecycle: Literal["active", "paused", "cancelled"] = "active"
     schedules: list[Schedule] = Field(default_factory=list)
 
-    def apply(self, **kwargs: Any) -> "StateBase":
+    def apply(self, **kwargs: Any) -> Self:
         """Return a copy of this state with the given fields updated.
 
-        Shorthand for ``state.model_copy(update={...})``::
+        Returns ``Self`` so subclasses get the precise type back without
+        casting:  ``MyState | None -> MyState``.  Shorthand for
+        ``state.model_copy(update={...})``::
 
             # Instead of:
             return state.model_copy(update={"last_checked_at": now, "count": state.count + 1})
