@@ -916,3 +916,345 @@ class TestOopAdapter:
         async with counter_repo._session_maker() as s:  # type: ignore[attr-defined]
             stored = await counter_repo.get_current_state(s, "wf-sub")
         assert stored.state.count == 15
+
+
+# ---------------------------------------------------------------------------
+# @periodic_task — recurring task scheduling via decorator + auto re-arm
+# ---------------------------------------------------------------------------
+
+from fleuve import periodic_task
+from fleuve.model import CmdPeriodicTaskDue, EvPeriodicDelay
+
+
+# A small Vault-style workflow that uses @periodic_task.  Self-contained:
+# its own State, events, DB models, and repo fixture.
+
+class VaultState(StateBase):
+    psyop_runs: int = 0
+    reconcile_runs: int = 0
+    activated: bool = False
+    subscriptions: list[Sub] = Field(default_factory=list)
+    external_subscriptions: list = Field(default_factory=list)
+
+
+class EvVaultActivated(EventBase):
+    type: Literal["vault.activated"] = "vault.activated"
+
+
+class EvPsyopRequested(EventBase):
+    type: Literal["vault.psyop_requested"] = "vault.psyop_requested"
+
+
+class EvReconcileRequested(EventBase):
+    type: Literal["vault.reconcile_requested"] = "vault.reconcile_requested"
+
+
+class Vault(Workflow):
+    state: VaultState | None = None
+
+    @classmethod
+    def name(cls) -> str:
+        return "oop_vault"
+
+    @command
+    def activate(self) -> list[Any]:
+        return [EvVaultActivated(), *self.kickstart_periodic()]
+
+    # Use `first_run=0` in tests so we can fire dispatch immediately.
+    @periodic_task(
+        every=datetime.timedelta(hours=6),
+        first_run=datetime.timedelta(seconds=0),
+    )
+    def psyop_check(self) -> list[Any]:
+        return [EvPsyopRequested()]
+
+    @periodic_task(
+        every=datetime.timedelta(hours=12),
+        first_run=datetime.timedelta(seconds=0),
+    )
+    def entity_reconcile(self) -> list[Any]:
+        return [EvReconcileRequested()]
+
+    # A disabled task — kickstart skips it; auto-rearm omits its EvPeriodicDelay.
+    @periodic_task(
+        every=datetime.timedelta(0),
+        first_run=datetime.timedelta(seconds=0),
+    )
+    def disabled_task(self) -> list[Any]:
+        return []
+
+    @event_handler
+    def _on_activated(self, ev: EvVaultActivated) -> VaultState:
+        cur = self.state or VaultState()
+        return cur.apply(activated=True)
+
+    @event_handler
+    def _on_psyop_req(self, ev: EvPsyopRequested) -> VaultState:
+        cur = self.state or VaultState()
+        return cur.apply(psyop_runs=cur.psyop_runs + 1)
+
+    @event_handler
+    def _on_reconcile_req(self, ev: EvReconcileRequested) -> VaultState:
+        cur = self.state or VaultState()
+        return cur.apply(reconcile_runs=cur.reconcile_runs + 1)
+
+
+VaultCmdUnion = Vault.command_union()
+
+
+_VaultEventBody = Union[
+    EvVaultActivated,
+    EvPsyopRequested,
+    EvReconcileRequested,
+    EvPeriodicDelay,
+    EvDelayComplete[VaultCmdUnion],  # type: ignore[valid-type]
+    EvSystemPause,
+    EvSystemResume,
+    EvSystemCancel,
+]
+
+
+class VaultEventModel(StoredEvent):
+    __tablename__ = "oop_vault_events"
+
+    @declared_attr
+    def body(cls) -> Mapped:  # type: ignore[type-arg,override]
+        return mapped_column(
+            PydanticType(_VaultEventBody),  # type: ignore[arg-type]
+            nullable=False,
+        )
+
+
+class VaultSubscriptionModel(Subscription):
+    __tablename__ = "oop_vault_subs"
+
+
+class VaultDelayScheduleModel(DelaySchedule):
+    __tablename__ = "oop_vault_delays"
+
+    @declared_attr
+    def next_command(cls) -> Mapped:  # type: ignore[type-arg,override]
+        return mapped_column(
+            PydanticType(VaultCmdUnion),
+            nullable=False,
+        )
+
+
+@pytest.fixture
+async def vault_storage(nats_client: NATS) -> AsyncGenerator[EuphStorageNATS, None]:
+    bucket_name = f"oop_vault_{uuid.uuid4().hex[:8]}"
+    storage: EuphStorageNATS = EuphStorageNATS(
+        c=nats_client, bucket=bucket_name, s=VaultState
+    )
+    await storage.__aenter__()
+    yield storage
+    await storage.__aexit__(None, None, None)
+    try:
+        js = nats_client.jetstream()
+        await js.delete_key_value(bucket_name)
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def vault_repo(test_session_maker, vault_storage) -> AsyncRepo:
+    return AsyncRepo(
+        session_maker=test_session_maker,
+        es=vault_storage,
+        model=Vault,
+        db_event_model=VaultEventModel,
+        db_sub_model=VaultSubscriptionModel,
+        db_delay_schedule_model=VaultDelayScheduleModel,
+    )
+
+
+class TestOopPeriodicUnit:
+    """Pure-Python checks for @periodic_task wiring."""
+
+    def test_periodic_handlers_registered(self) -> None:
+        handlers = Vault._periodic_handlers  # type: ignore[attr-defined]
+        assert set(handlers) == {"psyop_check", "entity_reconcile", "disabled_task"}
+        # Each entry is (PeriodicTask, callable)
+        spec, fn = handlers["psyop_check"]
+        assert spec.id == "psyop_check"
+        assert spec.interval == datetime.timedelta(hours=6)
+        assert callable(fn)
+
+    def test_kickstart_emits_only_enabled_tasks(self) -> None:
+        # Build an instance directly to exercise kickstart_periodic.
+        instance = Vault.model_construct(state=None)
+        events = instance.kickstart_periodic()
+        ids = sorted(e.task_id for e in events)
+        # disabled_task (every=0) is skipped.
+        assert ids == ["entity_reconcile", "psyop_check"]
+        for ev in events:
+            assert isinstance(ev, EvPeriodicDelay)
+            assert ev.next_cmd.task_id == ev.task_id
+
+    def test_kickstart_filtered_by_name(self) -> None:
+        instance = Vault.model_construct(state=None)
+        events = instance.kickstart_periodic("psyop_check")
+        assert len(events) == 1
+        assert events[0].task_id == "psyop_check"
+
+    def test_kickstart_unknown_task_raises(self) -> None:
+        instance = Vault.model_construct(state=None)
+        with pytest.raises(KeyError):
+            instance.kickstart_periodic("does_not_exist")
+
+    def test_kickstart_skips_already_scheduled(self) -> None:
+        from fleuve.model import Schedule
+
+        # State that already has psyop_check scheduled (re-activation case).
+        existing_schedule = Schedule(
+            id="periodic_psyop_check",
+            cron_expression="0 */6 * * *",
+            next_cmd=CmdPeriodicTaskDue(task_id="psyop_check"),
+        )
+        state = VaultState(schedules=[existing_schedule])
+        instance = Vault.model_construct(state=state)
+
+        events = instance.kickstart_periodic()
+        # Only entity_reconcile should be kicked; psyop_check is already there.
+        assert [e.task_id for e in events] == ["entity_reconcile"]
+
+    def test_dispatch_calls_handler_and_re_arms(self) -> None:
+        events = Vault.decide(
+            VaultState(activated=True),
+            CmdPeriodicTaskDue(task_id="psyop_check"),
+        )
+        # The user's events come first, then the auto re-arm EvPeriodicDelay.
+        assert len(events) == 2
+        assert isinstance(events[0], EvPsyopRequested)
+        rearm = events[1]
+        assert isinstance(rearm, EvPeriodicDelay)
+        assert rearm.task_id == "psyop_check"
+        assert rearm.next_cmd.task_id == "psyop_check"
+        # delay_until should be roughly 6 hours from now (next interval).
+        delta = rearm.delay_until - datetime.datetime.now(datetime.timezone.utc)
+        assert datetime.timedelta(hours=5, minutes=55) < delta < datetime.timedelta(
+            hours=6, minutes=5
+        )
+
+    def test_disabled_task_dispatch_does_not_re_arm(self) -> None:
+        # CmdPeriodicTaskDue for the disabled task: handler returns [], the
+        # dispatcher must NOT re-arm (otherwise the task would run forever
+        # after being disabled).
+        events = Vault.decide(
+            VaultState(activated=True),
+            CmdPeriodicTaskDue(task_id="disabled_task"),
+        )
+        assert events == []
+
+    def test_unknown_task_id_is_noop(self) -> None:
+        # Stale CmdPeriodicTaskDue (e.g. method renamed/removed) becomes a
+        # silent no-op — better than a Rejection that would re-queue forever.
+        events = Vault.decide(
+            VaultState(activated=True),
+            CmdPeriodicTaskDue(task_id="ghost_task"),
+        )
+        assert events == []
+
+    def test_command_union_includes_periodic_due(self) -> None:
+        # Ensures users can put EvDelayComplete[Vault.command_union()] in their
+        # event body union and have CmdPeriodicTaskDue payloads round-trip.
+        from pydantic import TypeAdapter
+
+        adapter = TypeAdapter(VaultCmdUnion)
+        cmd = adapter.validate_python({"task_id": "psyop_check"})
+        assert isinstance(cmd, CmdPeriodicTaskDue)
+        # And method-routed cmds still work via the discriminator.
+        cmd2 = adapter.validate_python({"method": "activate", "params": {}})
+        assert getattr(cmd2, "method") == "activate"
+
+    def test_explicit_on_command_overrides_synthetic(self) -> None:
+        # If the user provides their own @on_command(CmdPeriodicTaskDue),
+        # the framework defers to it — no auto re-arm, full control.
+        captured: dict[str, Any] = {}
+
+        class CustomDispatch(Workflow):
+            state: VaultState | None = None
+
+            @classmethod
+            def name(cls) -> str:
+                return "custom_dispatch"
+
+            @on_command(CmdPeriodicTaskDue)
+            def my_dispatch(self, cmd: CmdPeriodicTaskDue) -> list[Any]:
+                captured["task_id"] = cmd.task_id
+                return []  # no events, no re-arm — caller's choice
+
+            @periodic_task(every=datetime.timedelta(hours=1))
+            def heartbeat(self) -> list[Any]:
+                return [EvPsyopRequested()]
+
+            @event_handler
+            def _h(self, ev: EvPsyopRequested) -> VaultState:
+                return self.state or VaultState()
+
+        events = CustomDispatch.decide(
+            VaultState(),
+            CmdPeriodicTaskDue(task_id="heartbeat"),
+        )
+        assert events == []
+        assert captured["task_id"] == "heartbeat"
+        # And the synthetic dispatcher was NOT installed (only one raw
+        # handler — the user's).
+        raw = CustomDispatch._raw_command_handlers  # type: ignore[attr-defined]
+        assert len(raw) == 1
+        assert raw[0][1].__name__ == "my_dispatch"
+
+
+class TestOopPeriodicIntegration:
+    """End-to-end test: activate persists EvPeriodicDelay, dispatch through the
+    repo fires the handler, body union round-trips CmdPeriodicTaskDue."""
+
+    @pytest.mark.asyncio
+    async def test_activate_persists_periodic_delay_events(
+        self, vault_repo, test_session
+    ) -> None:
+        await vault_repo.create_new(Vault.cmd("activate"), "v-1")
+
+        # Three events stored: EvVaultActivated + 2 EvPeriodicDelay (psyop +
+        # reconcile; disabled_task is omitted by kickstart_periodic).
+        rows = (
+            await test_session.execute(
+                select(VaultEventModel.event_type)
+                .where(VaultEventModel.workflow_id == "v-1")
+                .order_by(VaultEventModel.workflow_version)
+            )
+        ).fetchall()
+        types = [r[0] for r in rows]
+        assert types[0] == "vault.activated"
+        assert types.count("periodic_delay") == 2
+
+    @pytest.mark.asyncio
+    async def test_periodic_due_dispatches_and_re_arms_through_repo(
+        self, vault_repo, test_session
+    ) -> None:
+        await vault_repo.create_new(Vault.cmd("activate"), "v-2")
+
+        # Simulate the delay scheduler firing: feed CmdPeriodicTaskDue
+        # straight into process_command (this is what runner does after
+        # event_to_cmd unwraps EvDelayComplete).
+        outcome = await vault_repo.process_command(
+            "v-2", CmdPeriodicTaskDue(task_id="psyop_check")
+        )
+        assert not isinstance(outcome, Rejection)
+        stored, emitted = outcome
+        assert stored.state.psyop_runs == 1
+
+        # And a fresh EvPeriodicDelay was persisted for the next run.
+        delay_rows = (
+            await test_session.execute(
+                select(VaultEventModel.body)
+                .where(VaultEventModel.workflow_id == "v-2")
+                .where(VaultEventModel.event_type == "periodic_delay")
+                .order_by(VaultEventModel.workflow_version.desc())
+                .limit(1)
+            )
+        ).fetchall()
+        assert len(delay_rows) == 1
+        latest = delay_rows[0][0]
+        assert latest.task_id == "psyop_check"
+        assert latest.next_cmd.task_id == "psyop_check"

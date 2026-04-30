@@ -304,22 +304,128 @@ method-routing dispatcher, so a raw command never falls through to
 may coexist on the same class (one per command type); they fire in
 declaration order, and the first matching `isinstance` wins.
 
-The `command_union()` does **not** include `@on_command` handlers —
-they consume pre-existing classes rather than auto-deriving new ones.
-For DB columns that store framework commands alongside user commands
-(e.g. a `DelaySchedule.next_command` that holds both `cls.cmd(...)`
-and `CmdPeriodicTaskDue`), build a wider union manually:
+The `command_union()` does **not** include `@on_command` handlers in
+the general case — they consume pre-existing classes rather than
+auto-deriving new ones.  The one exception is `CmdPeriodicTaskDue`,
+which `command_union()` includes automatically when the class has any
+`@periodic_task` method (see next section).
+
+For DB columns that store other framework commands alongside user
+commands, build a wider union manually:
 
 ```python
 from typing import Union
-from fleuve.model import CmdPeriodicTaskDue
+from some_module import SomeFrameworkCmd
 
-JanitorCommand = Union[Janitor.command_union(), CmdPeriodicTaskDue]
+JanitorCommand = Union[Janitor.command_union(), SomeFrameworkCmd]
 
 class JanitorDelaySchedule(DelaySchedule):
     next_command = mapped_column(
         PydanticType(JanitorCommand), nullable=False
     )
+```
+
+## Recurring work: `@periodic_task`
+
+The decorator-style equivalent of the legacy `Workflow(periodic_tasks=
+[PeriodicTask(id="x", interval=...)])` form.  The method's `__name__`
+becomes the task id, the framework auto-installs a dispatcher for
+`CmdPeriodicTaskDue`, and **re-arming is automatic** — you never have
+to remember `*Workflow.reschedule_periodic_task("x")`.
+
+```python
+from datetime import timedelta
+from fleuve import Workflow, command, event_handler, periodic_task
+
+class Vault(Workflow):
+    state: VaultState | None = None
+
+    @classmethod
+    def name(cls): return "vault"
+
+    @command
+    def activate(self) -> list[Event]:
+        # kickstart_periodic() is auto-installed when @periodic_task
+        # methods exist; it returns initial EvPeriodicDelay events.
+        return [EvActivated(...), *self.kickstart_periodic()]
+
+    @periodic_task(every=timedelta(hours=6), first_run=timedelta(minutes=1))
+    def psyop_check(self) -> list[Event]:
+        return [EvPsyopRequested(vault_id=self.state.vault_id)]
+
+    @periodic_task(every=timedelta(hours=12), jitter=timedelta(minutes=10))
+    def entity_reconcile(self) -> list[Event]:
+        return [EvEntityReconcileRequested(vault_id=self.state.vault_id)]
+
+    @event_handler
+    def _on_psyop_checked(self, ev: EvPsyopChecked) -> VaultState:
+        # Notice: no `*reschedule_periodic_task("psyop_check")` — the
+        # framework re-armed psyop_check when CmdPeriodicTaskDue was
+        # dispatched, before this handler even ran.
+        return self.state.apply(last_psyop_at=ev.at)
+```
+
+### What the framework does for you
+
+When a `@periodic_task` method is detected:
+
+1. A synthetic `@on_command(CmdPeriodicTaskDue)` handler is auto-installed.
+   When `CmdPeriodicTaskDue(task_id=X)` arrives, it:
+   - looks up the method whose `__name__` is `X`,
+   - calls it with no args (the method reads `self.state`),
+   - **appends an `EvPeriodicDelay`** for the next run — unless the
+     task is disabled (`every=timedelta(0)`).
+2. `command_union()` widens to include `CmdPeriodicTaskDue` so the
+   `EvDelayComplete[command_union()]` member of your event-body union
+   round-trips periodic deliveries automatically.
+3. `kickstart_periodic(*only)` is added as an instance method.
+   Skips tasks already scheduled in `state.schedules` (re-activation
+   is idempotent) and skips disabled tasks.
+
+### Disabling, opt-out, and manual control
+
+- **Disable a task**: `@periodic_task(every=timedelta(0))` — the
+  dispatcher returns the user's events without re-arming, and
+  `kickstart_periodic` skips it.  Useful as a runtime kill-switch
+  controlled by a config flag (`every=cfg.psyop_interval or timedelta(0)`).
+- **Stale `task_id`**: if `CmdPeriodicTaskDue(task_id=X)` arrives for
+  a method that no longer exists (renamed, removed), the dispatcher
+  returns `[]` — the stale delay dies quietly instead of crashing
+  with "unknown task".
+- **Full opt-out**: define your own `@on_command(CmdPeriodicTaskDue)`
+  on the class.  The framework detects this and does **not** install
+  its synthetic handler — your method takes full responsibility for
+  dispatch and re-arm.
+- **Selective kickstart**: `self.kickstart_periodic("psyop_check")`
+  only emits the named tasks.  Useful when activation is split across
+  multiple commands and only some tasks should fire from each.
+
+### Side-by-side: old vs new
+
+```python
+# Before: spec separated from handler, id repeated 3+ times,
+# manual re-arm required in every completion branch.
+class Vault(Workflow[...], periodic_tasks=[
+    PeriodicTask(id="psyop_check", interval=timedelta(hours=6)),
+]):
+    @staticmethod
+    def decide(state, cmd):
+        if isinstance(cmd, CmdPeriodicTaskDue):
+            match cmd.task_id:
+                case "psyop_check":
+                    return [EvPsyopRequested(...)]
+        if isinstance(cmd, CmdPsyopCheckDone):
+            return [
+                EvPsyopChecked(),
+                *Vault.reschedule_periodic_task("psyop_check"),  # MUST not forget
+            ]
+
+# After: one method, one source of truth.
+class Vault(Workflow):
+    @periodic_task(every=timedelta(hours=6))
+    def psyop_check(self) -> list[Event]:
+        return [EvPsyopRequested(vault_id=self.state.vault_id)]
+    # CmdPsyopCheckDone is just a regular @command — re-arm is automatic.
 ```
 
 ## Backward compatibility

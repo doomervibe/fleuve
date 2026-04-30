@@ -62,6 +62,7 @@ All of them route through the same ``process_command`` /
 
 from __future__ import annotations
 
+import datetime
 import inspect
 from typing import Annotated, Any, Callable, Literal, Type, Union
 
@@ -72,6 +73,7 @@ __all__ = [
     "command",
     "event_handler",
     "on_command",
+    "periodic_task",
 ]
 
 # ---------------------------------------------------------------------------
@@ -94,6 +96,7 @@ class WorkflowRejection(Exception):
 _COMMAND_MARKER = "__fleuve_command__"
 _EVENT_HANDLER_MARKER = "__fleuve_event_handler__"
 _ON_COMMAND_MARKER = "__fleuve_on_command__"
+_PERIODIC_TASK_MARKER = "__fleuve_periodic_task__"
 
 
 def command(fn: Callable) -> Callable:
@@ -172,19 +175,82 @@ def on_command(cmd_type: type) -> Callable[[Callable], Callable]:
     return decorator
 
 
+def periodic_task(
+    *,
+    every: datetime.timedelta,
+    first_run: datetime.timedelta = datetime.timedelta(minutes=1),
+    jitter: datetime.timedelta = datetime.timedelta(),
+) -> Callable[[Callable], Callable]:
+    """Mark a method as a periodic task handler.
+
+    The decorated method runs every ``every`` after the first kick.  The
+    method's ``__name__`` is used as the task id, so the same string never
+    appears twice in your code (versus the legacy ``periodic_tasks=[
+    PeriodicTask(id="psyop_check", ...)]`` form which repeats the id in
+    the spec, in ``decide``, and in ``reschedule_periodic_task``).
+
+    The framework auto-installs an ``@on_command(CmdPeriodicTaskDue)``
+    dispatcher that:
+
+    - Looks up the method by ``cmd.task_id``.
+    - Calls it with no arguments — the method reads ``self.state``.
+    - Appends an :class:`fleuve.model.EvPeriodicDelay` for the next run
+      so the user **never** has to call ``reschedule_periodic_task``.
+
+    Use :meth:`Workflow.kickstart_periodic` (an instance method auto-
+    installed when any ``@periodic_task`` exists on the class) from
+    inside an ``@command`` method (typically ``activate``) to emit the
+    initial delay events::
+
+        @command
+        def activate(self) -> list[Event]:
+            return [EvActivated(...), *self.kickstart_periodic()]
+
+    Args:
+        every: Interval between runs.  ``timedelta(0)`` disables the
+            task entirely — the dispatcher returns the user's events
+            without re-arming, and ``kickstart_periodic`` skips it.
+        first_run: Delay between ``kickstart_periodic`` and the first
+            run.  Defaults to one minute.
+        jitter: Maximum random offset added to the scheduled time;
+            uniform in ``[base, base + jitter]``.  Use to prevent
+            thundering-herd when many workflows kickstart at the same
+            instant.
+
+    Opt-out: if you provide an explicit
+    ``@on_command(CmdPeriodicTaskDue)`` method on the same class, the
+    framework does **not** install its synthetic dispatcher — your
+    handler takes full responsibility (including re-arm).
+    """
+    from fleuve.periodic import PeriodicTask
+
+    def decorator(fn: Callable) -> Callable:
+        spec = PeriodicTask(
+            id=fn.__name__,
+            interval=every,
+            first_run_after=first_run,
+            jitter=jitter,
+        )
+        setattr(fn, _PERIODIC_TASK_MARKER, spec)
+        return fn
+
+    return decorator
+
+
 # ---------------------------------------------------------------------------
 # Class-creation hook (called from Workflow.__init_subclass__)
 
 
 def _has_oop_methods(cls: type) -> bool:
     """True if any direct attribute on *cls* is a @command, @event_handler,
-    or @on_command-decorated method.
+    @on_command, or @periodic_task-decorated method.
     """
     for v in cls.__dict__.values():
         if callable(v) and (
             getattr(v, _COMMAND_MARKER, False)
             or getattr(v, _EVENT_HANDLER_MARKER, False)
             or getattr(v, _ON_COMMAND_MARKER, None) is not None
+            or getattr(v, _PERIODIC_TASK_MARKER, None) is not None
         ):
             return True
     return False
@@ -224,6 +290,7 @@ def _setup_oop_workflow(cls: type) -> None:
     cmd_models: dict[str, Type[BaseModel]] = {}
     ev_handlers: list[tuple[type, Callable]] = []
     raw_cmd_handlers: list[tuple[type, Callable]] = []
+    periodic_handlers: dict[str, tuple[Any, Callable]] = {}
 
     for name, attr in cls.__dict__.items():
         if not callable(attr):
@@ -232,19 +299,46 @@ def _setup_oop_workflow(cls: type) -> None:
             model = _build_command_model(cls, name, attr)
             cmd_handlers[name] = attr
             cmd_models[name] = model
-        elif getattr(attr, _EVENT_HANDLER_MARKER, False):
+            continue
+        if getattr(attr, _EVENT_HANDLER_MARKER, False):
             ev_type = _extract_event_type(cls, name, attr)
             ev_handlers.append((ev_type, attr))
-        else:
-            raw_cmd_type = getattr(attr, _ON_COMMAND_MARKER, None)
-            if raw_cmd_type is not None:
-                raw_cmd_handlers.append((raw_cmd_type, attr))
+            continue
+        raw_cmd_type = getattr(attr, _ON_COMMAND_MARKER, None)
+        if raw_cmd_type is not None:
+            raw_cmd_handlers.append((raw_cmd_type, attr))
+            continue
+        periodic_spec = getattr(attr, _PERIODIC_TASK_MARKER, None)
+        if periodic_spec is not None:
+            periodic_handlers[name] = (periodic_spec, attr)
 
     cls._command_handlers = cmd_handlers  # type: ignore[attr-defined]
     cls._command_models = cmd_models  # type: ignore[attr-defined]
     cls._event_handlers = tuple(ev_handlers)  # type: ignore[attr-defined]
-    cls._raw_command_handlers = tuple(raw_cmd_handlers)  # type: ignore[attr-defined]
+    cls._periodic_handlers = periodic_handlers  # type: ignore[attr-defined]
     cls._is_oop_workflow = True  # type: ignore[attr-defined]
+
+    # Auto-install the CmdPeriodicTaskDue dispatcher when @periodic_task
+    # methods exist and the user hasn't provided their own
+    # @on_command(CmdPeriodicTaskDue) — the user's handler always wins.
+    if periodic_handlers:
+        from fleuve.model import CmdPeriodicTaskDue
+
+        already_handled = any(
+            cmd_type is CmdPeriodicTaskDue or issubclass(CmdPeriodicTaskDue, cmd_type)
+            for cmd_type, _ in raw_cmd_handlers
+        )
+        if not already_handled:
+            raw_cmd_handlers.append(
+                (CmdPeriodicTaskDue, _periodic_task_dispatch)
+            )
+
+        # Install the kickstart_periodic instance method (only when there are
+        # tasks to kickstart, and only if the user hasn't shadowed it).
+        if "kickstart_periodic" not in cls.__dict__:
+            cls.kickstart_periodic = _kickstart_periodic  # type: ignore[attr-defined]
+
+    cls._raw_command_handlers = tuple(raw_cmd_handlers)  # type: ignore[attr-defined]
 
     # Install dispatchers if the user hasn't overridden them.  Using
     # cls.__dict__ (not hasattr) so inherited abstract methods don't block.
@@ -416,6 +510,105 @@ def _oop_evolve(cls: type, state: Any, event: Any) -> Any:
     return state
 
 
+def _periodic_task_dispatch(self: Any, cmd: Any) -> list[Any]:
+    """Auto-installed handler for ``CmdPeriodicTaskDue`` on classes that use
+    ``@periodic_task``.
+
+    Two responsibilities:
+
+    1. Look up the periodic-task method by ``cmd.task_id`` and invoke it.
+    2. Append an :class:`fleuve.model.EvPeriodicDelay` for the next run so
+       the user never has to call ``reschedule_periodic_task`` manually.
+
+    If ``cmd.task_id`` does not match any registered ``@periodic_task``,
+    the dispatcher returns an empty list — a stale periodic delay (e.g.
+    a task that was renamed or removed) becomes a no-op rather than a
+    Rejection / crash.  This keeps the workflow robust to schema drift.
+    """
+    from fleuve.model import CmdPeriodicTaskDue, EvPeriodicDelay
+
+    cls = type(self)
+    handlers: dict[str, tuple[Any, Callable]] = getattr(
+        cls, "_periodic_handlers", {}
+    )
+    entry = handlers.get(cmd.task_id)
+    if entry is None:
+        return []
+    spec, fn = entry
+    user_events = list(fn(self) or [])
+    if spec.is_enabled:
+        user_events.append(
+            EvPeriodicDelay(
+                id=f"periodic_{cmd.task_id}",
+                delay_until=spec.next_delay_until(),
+                next_cmd=CmdPeriodicTaskDue(task_id=cmd.task_id),
+                task_id=cmd.task_id,
+            )
+        )
+    return user_events
+
+
+def _kickstart_periodic(self: Any, *only: str) -> list[Any]:
+    """Return :class:`fleuve.model.EvPeriodicDelay` events to start the
+    workflow's periodic tasks.
+
+    Call from inside an ``@command`` method (typically the activation
+    one) to kick off all enabled periodic tasks::
+
+        @command
+        def activate(self) -> list[Event]:
+            return [EvActivated(...), *self.kickstart_periodic()]
+
+    Args:
+        *only: Optional task ids (method names) to limit the kickstart
+            to.  When empty, every ``@periodic_task`` on the class is
+            included.  Useful when activation is split across multiple
+            commands and only some tasks should fire from each.
+
+    Tasks whose delay is already present in ``state.schedules`` (i.e.
+    a previous activation already scheduled them) are silently skipped
+    — re-activation is idempotent.  Tasks with ``every=timedelta(0)``
+    (disabled) are also skipped.
+    """
+    from fleuve.model import CmdPeriodicTaskDue, EvPeriodicDelay
+
+    cls = type(self)
+    handlers: dict[str, tuple[Any, Callable]] = getattr(
+        cls, "_periodic_handlers", {}
+    )
+    if only:
+        unknown = [t for t in only if t not in handlers]
+        if unknown:
+            raise KeyError(
+                f"{cls.__name__} has no @periodic_task method(s) "
+                f"named {unknown!r}; available: {sorted(handlers)}"
+            )
+        selected = list(only)
+    else:
+        selected = list(handlers.keys())
+
+    already: set[str] = set()
+    state = getattr(self, "state", None)
+    if state is not None:
+        already = {s.id for s in getattr(state, "schedules", [])}
+
+    out: list[Any] = []
+    for tid in selected:
+        spec, _ = handlers[tid]
+        delay_id = f"periodic_{tid}"
+        if not spec.is_enabled or delay_id in already:
+            continue
+        out.append(
+            EvPeriodicDelay(
+                id=delay_id,
+                delay_until=spec.first_delay_until(),
+                next_cmd=CmdPeriodicTaskDue(task_id=tid),
+                task_id=tid,
+            )
+        )
+    return out
+
+
 def _build_instance(cls: type, state: Any) -> Any:
     """Construct a class-based workflow instance bound to *state*.
 
@@ -463,10 +656,22 @@ def _cmd(cls: type, method_name: str, **kwargs: Any) -> BaseModel:
 
 
 def _command_union(cls: type) -> Any:
-    """Return a discriminated union of all ``@command`` models for *cls*.
+    """Return a union of every command kind this workflow can dispatch.
+
+    Members:
+
+    - The auto-built per-method models for every ``@command``, joined by
+      ``method`` discriminator (O(1) deserialization).
+    - :class:`fleuve.model.CmdPeriodicTaskDue` — added automatically when
+      the class has any ``@periodic_task`` method, so the events table's
+      ``EvDelayComplete[command_union]`` can store periodic
+      delay-completions without users having to remember to widen the
+      union manually.
 
     Use as the target of ``PydanticType`` for any DB column that stores a
-    command (``DelaySchedule.next_command``, custom command tables, …)::
+    command (``DelaySchedule.next_command``, the ``next_cmd`` argument of
+    ``EvDelayComplete[...]`` in event-body unions, custom command
+    tables)::
 
         class CounterDelaySchedule(DelaySchedule):
             next_command = mapped_column(
@@ -474,16 +679,37 @@ def _command_union(cls: type) -> Any:
                 nullable=False,
             )
 
-    Raises ``TypeError`` if *cls* has no ``@command`` methods (a silent
-    empty union would deserialize to nothing useful and produce confusing
-    runtime errors).
+    Raises ``TypeError`` if *cls* has no ``@command`` and no
+    ``@periodic_task`` methods (a silent empty union would deserialize
+    to nothing useful and produce confusing runtime errors).
     """
     models: dict[str, Type[BaseModel]] = getattr(cls, "_command_models", {})
-    if not models:
+    periodic = getattr(cls, "_periodic_handlers", {})
+    if not models and not periodic:
         raise TypeError(
-            f"{cls.__name__} has no @command methods; cannot build a " f"command union"
+            f"{cls.__name__} has no @command or @periodic_task methods; "
+            f"cannot build a command union"
         )
-    model_list = list(models.values())
-    if len(model_list) == 1:
-        return model_list[0]
-    return Annotated[Union[tuple(model_list)], Field(discriminator="method")]
+
+    method_branch: Any = None
+    if models:
+        model_list = list(models.values())
+        if len(model_list) == 1:
+            method_branch = model_list[0]
+        else:
+            method_branch = Annotated[
+                Union[tuple(model_list)], Field(discriminator="method")
+            ]
+
+    if periodic:
+        from fleuve.model import CmdPeriodicTaskDue
+
+        if method_branch is None:
+            return CmdPeriodicTaskDue
+        # Outer untagged union: try the discriminated method-branch
+        # first, fall back to CmdPeriodicTaskDue (which has no `method`
+        # field).  Works because Pydantic's discriminator on the inner
+        # branch correctly rejects payloads that lack `method`.
+        return Union[method_branch, CmdPeriodicTaskDue]
+
+    return method_branch
