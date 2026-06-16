@@ -350,6 +350,21 @@ class Activity(Base):
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
 
+    # Cross-recovery circuit breaker — incremented each time the recovery
+    # loop re-fires this row after a stale RUNNING/RETRYING state.  When
+    # this reaches the configured ceiling the row is marked FAILED with
+    # error_type="PoisonPillRecoveryExhausted" and never re-fired again.
+    cross_recovery_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    # Truncated event payload snapshot written when the row becomes a
+    # dead-letter (cross_recovery_attempts exhausted).  Enables grep-based
+    # operator triage without querying the event store.
+    dead_letter_body_summary: Mapped[Optional[str]] = mapped_column(
+        String(2000), nullable=True
+    )
+
     # Checkpoint data for resuming interrupted actions
     checkpoint: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict

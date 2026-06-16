@@ -65,6 +65,7 @@ class ActionExecutor(Generic[C, Ae]):
         runner_name: str | None = None,
         max_concurrent_actions: int | None = None,
         max_concurrent_actions_per_workflow: int | None = None,
+        max_cross_recovery_attempts: int = 3,
     ) -> None:
         self._session_maker = session_maker
         self._adapter = adapter
@@ -89,6 +90,7 @@ class ActionExecutor(Generic[C, Ae]):
         )
         self._max_concurrent_per_workflow = max_concurrent_actions_per_workflow
         self._workflow_semaphores: dict[str, asyncio.Semaphore] = {}
+        self._max_cross_recovery_attempts = max_cross_recovery_attempts
 
     def to_be_act_on(self, event: Any) -> bool:
         return self._adapter.to_be_act_on(event)
@@ -603,6 +605,9 @@ class ActionExecutor(Generic[C, Ae]):
         )
 
         events_to_fire: list[ConsumedEvent] = []
+        # Track (workflow_id, event_no) pairs recovered from a stale RUNNING /
+        # RETRYING state — these need cross_recovery_attempts incremented.
+        stale_recovered: set[tuple[str, int]] = set()
 
         async with self._session_maker() as s:
             result = await s.execute(
@@ -693,6 +698,60 @@ class ActionExecutor(Generic[C, Ae]):
                     )
                     continue
 
+                # Circuit breaker: if this row has been recovered and re-fired
+                # too many times, mark it as a dead-letter and stop re-firing.
+                # Only applies to stale RUNNING/RETRYING rows, not PENDING ones
+                # (PENDING rows have cross_recovery_attempts == 0 and have never
+                # been started, so they should always be allowed to fire once).
+                if activity.status in (
+                    ActionStatus.RUNNING.value,
+                    ActionStatus.RETRYING.value,
+                ) and activity.cross_recovery_attempts >= self._max_cross_recovery_attempts:
+                    dead_letter_msg = (
+                        f"activity recovered and re-fired "
+                        f"{activity.cross_recovery_attempts} times without completing; "
+                        f"original error: {activity.error_type or 'unknown'}: "
+                        f"{activity.error_message or ''}"
+                    )
+                    logger.error(
+                        "Recovery: dead-lettering activity after %d cross-recovery "
+                        "attempts (%s:%s)",
+                        activity.cross_recovery_attempts,
+                        activity.workflow_id,
+                        activity.event_number,
+                    )
+                    body_summary: str | None = None
+                    if event_row is not None:
+                        raw_body = getattr(event_row, "body", None)
+                        if raw_body is not None:
+                            try:
+                                body_summary = str(raw_body)[:2000]
+                            except Exception:
+                                pass
+                    await s.execute(
+                        update(self._db_activity_model)
+                        .where(
+                            self._db_activity_model.workflow_id == activity.workflow_id
+                        )
+                        .where(
+                            self._db_activity_model.event_number
+                            == activity.event_number
+                        )
+                        .values(
+                            status=ActionStatus.FAILED.value,
+                            finished_at=datetime.datetime.now(datetime.timezone.utc),
+                            error_type="PoisonPillRecoveryExhausted",
+                            error_message=dead_letter_msg,
+                            dead_letter_body_summary=body_summary,
+                        )
+                    )
+                    continue
+
+                if activity.status in (
+                    ActionStatus.RUNNING.value,
+                    ActionStatus.RETRYING.value,
+                ):
+                    stale_recovered.add((event.workflow_id, event.event_no))
                 events_to_fire.append(event)
 
             # Claim all recovered activities by bumping last_attempt_at before
@@ -701,11 +760,16 @@ class ActionExecutor(Generic[C, Ae]):
             # stale and double-firing them after our commit releases the lock.
             now = datetime.datetime.now(datetime.timezone.utc)
             for event in events_to_fire:
+                extra_values: dict = {"last_attempt_at": now}
+                if (event.workflow_id, event.event_no) in stale_recovered:
+                    extra_values["cross_recovery_attempts"] = (
+                        self._db_activity_model.cross_recovery_attempts + 1
+                    )
                 await s.execute(
                     update(self._db_activity_model)
                     .where(self._db_activity_model.workflow_id == event.workflow_id)
                     .where(self._db_activity_model.event_number == event.event_no)
-                    .values(last_attempt_at=now)
+                    .values(**extra_values)
                 )
 
             # Commit releases the FOR UPDATE row locks
